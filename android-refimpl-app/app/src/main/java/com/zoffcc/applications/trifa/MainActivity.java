@@ -145,6 +145,8 @@ import static com.zoffcc.applications.trifa.CallingActivity.on_call_started_acti
 import static com.zoffcc.applications.trifa.MessageListActivity.ml_friend_typing;
 import static com.zoffcc.applications.trifa.ProfileActivity.update_toxid_display_s;
 import static com.zoffcc.applications.trifa.TRIFAGlobals.CONFERENCE_ID_LENGTH;
+import static com.zoffcc.applications.trifa.TRIFAGlobals.CONTROL_PROXY_MESSAGE_TYPE.CONTROL_PROXY_MESSAGE_TYPE_FRIEND_PUBKEY_FOR_PROXY;
+import static com.zoffcc.applications.trifa.TRIFAGlobals.CONTROL_PROXY_MESSAGE_TYPE.CONTROL_PROXY_MESSAGE_TYPE_PROXY_PUBKEY_FOR_FRIEND;
 import static com.zoffcc.applications.trifa.TRIFAGlobals.DELETE_SQL_AND_VFS_ON_ERROR;
 import static com.zoffcc.applications.trifa.TRIFAGlobals.FRIEND_AVATAR_FILENAME;
 import static com.zoffcc.applications.trifa.TRIFAGlobals.GLOBAL_AUDIO_BITRATE;
@@ -201,6 +203,7 @@ import static com.zoffcc.applications.trifa.ToxVars.TOX_CONFERENCE_STATE_CHANGE.
 import static com.zoffcc.applications.trifa.ToxVars.TOX_CONFERENCE_STATE_CHANGE.TOX_CONFERENCE_STATE_CHANGE_PEER_JOIN;
 import static com.zoffcc.applications.trifa.ToxVars.TOX_CONFERENCE_STATE_CHANGE.TOX_CONFERENCE_STATE_CHANGE_PEER_NAME_CHANGE;
 import static com.zoffcc.applications.trifa.ToxVars.TOX_CONNECTION.TOX_CONNECTION_NONE;
+import static com.zoffcc.applications.trifa.ToxVars.TOX_CONNECTION.TOX_CONNECTION_TCP;
 import static com.zoffcc.applications.trifa.ToxVars.TOX_FILE_CONTROL.TOX_FILE_CONTROL_CANCEL;
 import static com.zoffcc.applications.trifa.ToxVars.TOX_FILE_CONTROL.TOX_FILE_CONTROL_PAUSE;
 import static com.zoffcc.applications.trifa.ToxVars.TOX_FILE_CONTROL.TOX_FILE_CONTROL_RESUME;
@@ -216,6 +219,16 @@ import static com.zoffcc.applications.trifa.TrifaToxService.TOX_SERVICE_STARTED;
 import static com.zoffcc.applications.trifa.TrifaToxService.is_tox_started;
 import static com.zoffcc.applications.trifa.TrifaToxService.orma;
 import static com.zoffcc.applications.trifa.TrifaToxService.vfs;
+
+/*
+
+first actually relayed message via ToxProxy
+
+2019-08-28 22:20:43.286148 [D] friend_message_v2_cb:
+fn=1 res=1 msg=🍔👍😜👍😜 @%\4äö ubnc Ovid n JB von in BK ni ubvzv8 ctcitccccccizzvvcvvv        u  tiigi gig i g35667u 6 66
+
+
+ */
 
 @SuppressWarnings("JniMissingFunction")
 @RuntimePermissions
@@ -325,7 +338,7 @@ public class MainActivity extends AppCompatActivity
     static boolean PREF__local_discovery_enabled = false;
     static boolean PREF__audiorec_asynctask = true;
     static boolean PREF__cam_recording_hint = false; // careful with this paramter!! it can break camerapreview buffer size!!
-    static boolean PREF__set_fps = true;
+    static boolean PREF__set_fps = false;
     static boolean PREF__fps_half = true;
     static boolean PREF__conference_show_system_messages = false;
     static boolean PREF__X_battery_saving_mode = false;
@@ -580,7 +593,7 @@ public class MainActivity extends AppCompatActivity
         PREF__software_echo_cancel = settings.getBoolean("software_echo_cancel", false);
         PREF__fps_half = settings.getBoolean("fps_half", true);
         PREF__U_keep_nospam = settings.getBoolean("U_keep_nospam", false);
-        PREF__set_fps = settings.getBoolean("set_fps", true);
+        PREF__set_fps = settings.getBoolean("set_fps", false);
         PREF__conference_show_system_messages = settings.getBoolean("conference_show_system_messages", false);
         PREF__X_battery_saving_mode = settings.getBoolean("X_battery_saving_mode", false);
         PREF__X_misc_button_enabled = settings.getBoolean("X_misc_button_enabled", false);
@@ -1176,8 +1189,8 @@ public class MainActivity extends AppCompatActivity
 
         String native_api = getNativeLibAPI();
         mt.setText(mt.getText() + "\n" + native_api);
-        mt.setText(mt.getText() + "\n" + "c-toxcore:v" + tox_version_major() + "." + tox_version_minor() + "." +
-                   tox_version_patch());
+        mt.setText(
+                mt.getText() + "\n" + "c-toxcore:v" + tox_version_major() + "." + tox_version_minor() + "." + tox_version_patch());
         mt.setText(mt.getText() + ", " + "jni-c-toxcore:v" + jnictoxcore_version());
 
         Log.i(TAG, "loaded:c-toxcore:v" + tox_version_major() + "." + tox_version_minor() + "." + tox_version_patch());
@@ -1855,7 +1868,7 @@ public class MainActivity extends AppCompatActivity
         PREF__software_echo_cancel = settings.getBoolean("software_echo_cancel", false);
         PREF__fps_half = settings.getBoolean("fps_half", true);
         PREF__U_keep_nospam = settings.getBoolean("U_keep_nospam", false);
-        PREF__set_fps = settings.getBoolean("set_fps", true);
+        PREF__set_fps = settings.getBoolean("set_fps", false);
         PREF__conference_show_system_messages = settings.getBoolean("conference_show_system_messages", false);
         PREF__X_battery_saving_mode = settings.getBoolean("X_battery_saving_mode", false);
         PREF__X_misc_button_enabled = settings.getBoolean("X_misc_button_enabled", false);
@@ -2085,337 +2098,6 @@ public class MainActivity extends AppCompatActivity
         super.onNewIntent(i);
     }
 
-    static FriendList main_get_friend(long friendnum)
-    {
-
-        String pubkey_temp = tox_friend_get_public_key__wrapper(friendnum);
-        // Log.i(TAG, "main_get_friend:pubkey=" + pubkey_temp + " fnum=" + friendnum);
-
-        FriendList f;
-        List<FriendList> fl = orma.selectFromFriendList().
-                tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friendnum)).
-                toList();
-
-        // Log.i(TAG, "main_get_friend:fl=" + fl + " size=" + fl.size());
-
-        if (fl.size() > 0)
-        {
-            f = fl.get(0);
-            // Log.i(TAG, "main_get_friend:f=" + f);
-        }
-        else
-        {
-            f = null;
-        }
-
-        return f;
-    }
-
-    static int is_friend_online(long friendnum)
-    {
-        try
-        {
-            return (orma.selectFromFriendList().
-                    tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friendnum)).
-                    toList().get(0).TOX_CONNECTION);
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-            return 0;
-        }
-    }
-
-    static boolean is_conference_active(String conference_identifier)
-    {
-        try
-        {
-            return (orma.selectFromConferenceDB().
-                    conference_identifierEq(conference_identifier).
-                    toList().get(0).conference_active);
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    synchronized static void set_all_friends_offline()
-    {
-        Thread t = new Thread()
-        {
-            @Override
-            public void run()
-            {
-                try
-                {
-                    orma.updateFriendList().
-                            TOX_CONNECTION(0).
-                            execute();
-                }
-                catch (Exception e)
-                {
-                }
-
-                try
-                {
-                    orma.updateFriendList().
-                            last_online_timestampEq(LAST_ONLINE_TIMSTAMP_ONLINE_NOW).
-                            last_online_timestamp(System.currentTimeMillis()).
-                            execute();
-                }
-                catch (Exception e)
-                {
-                }
-
-                // ------ DEBUG ------
-                // ------ set all friends to "never" seen online ------
-                // ------ DEBUG ------
-                // try
-                // {
-                //     orma.updateFriendList().
-                //             last_online_timestamp(LAST_ONLINE_TIMSTAMP_ONLINE_OFFLINE).
-                //             execute();
-                // }
-                // catch (Exception e)
-                // {
-                // }
-                // ------ DEBUG ------
-                // ------ set all friends to "never" seen online ------
-                // ------ DEBUG ------
-
-
-                try
-                {
-                    friend_list_fragment.set_all_friends_to_offline();
-                }
-                catch (Exception e)
-                {
-                }
-            }
-        };
-        t.start();
-    }
-
-    synchronized static void update_friend_in_db(FriendList f)
-    {
-        orma.updateFriendList().
-                tox_public_key_string(f.tox_public_key_string).
-                name(f.name).
-                status_message(f.status_message).
-                TOX_CONNECTION(f.TOX_CONNECTION).
-                TOX_CONNECTION_on_off(f.TOX_CONNECTION_on_off).
-                TOX_USER_STATUS(f.TOX_USER_STATUS).
-                execute();
-    }
-
-    synchronized static void update_friend_in_db_status_message(FriendList f)
-    {
-        orma.updateFriendList().
-                tox_public_key_stringEq(f.tox_public_key_string).
-                status_message(f.status_message).
-                execute();
-    }
-
-    synchronized static void update_friend_in_db_status(FriendList f)
-    {
-        // Log.i(TAG, "update_friend_in_db_status:f=" + f);
-
-        int numrows = orma.updateFriendList().
-                tox_public_key_stringEq(f.tox_public_key_string).
-                TOX_USER_STATUS(f.TOX_USER_STATUS).
-                execute();
-
-        Log.i(TAG, "update_friend_in_db_status:numrows=" + numrows);
-
-    }
-
-    synchronized static void update_friend_in_db_connection_status(FriendList f)
-    {
-        orma.updateFriendList().
-                tox_public_key_stringEq(f.tox_public_key_string).
-                TOX_CONNECTION(f.TOX_CONNECTION).
-                TOX_CONNECTION_on_off(f.TOX_CONNECTION_on_off).
-                execute();
-    }
-
-    synchronized static void update_friend_in_db_last_online_timestamp(FriendList f)
-    {
-        // Log.i(TAG, "update_friend_in_db_last_online_timestamp");
-        try
-        {
-            orma.updateFriendList().
-                    tox_public_key_stringEq(f.tox_public_key_string).
-                    last_online_timestamp(f.last_online_timestamp).
-                    execute();
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
-    synchronized static void update_friend_in_db_name(FriendList f)
-    {
-        orma.updateFriendList().
-                tox_public_key_stringEq(f.tox_public_key_string).
-                name(f.name).
-                execute();
-    }
-
-    synchronized static void update_message_in_db(final Message m)
-    {
-        final Thread t = new Thread()
-        {
-            @Override
-            public void run()
-            {
-                try
-                {
-                    orma.updateMessage().
-                            idEq(m.id).
-                            read(m.read).
-                            text(m.text).
-                            sent_timestamp(m.sent_timestamp).
-                            rcvd_timestamp(m.rcvd_timestamp).
-                            filename_fullpath(m.filename_fullpath).
-                            execute();
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
-                }
-            }
-        };
-        t.start();
-    }
-
-    static void update_message_in_db_filename_fullpath_friendnum_and_filenum(long friend_number, long file_number, String filename_fullpath)
-    {
-        try
-        {
-            long ft_id = orma.selectFromFiletransfer().
-                    tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friend_number)).
-                    and().file_numberEq(file_number).orderByIdDesc().get(0).id;
-
-            update_message_in_db_filename_fullpath_from_id(orma.selectFromMessage().
-                    filetransfer_idEq(ft_id).and().
-                    tox_friendpubkeyEq(tox_friend_get_public_key__wrapper(friend_number)).
-                    get(0).id, filename_fullpath);
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
-    static void update_message_in_db_filename_fullpath_from_id(long msg_id, String filename_fullpath)
-    {
-        try
-        {
-            orma.updateMessage().idEq(msg_id).filename_fullpath(filename_fullpath).execute();
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
-    static void update_message_in_db_filename_fullpath(final Message m)
-    {
-        try
-        {
-            orma.updateMessage().
-                    idEq(m.id).
-                    filename_fullpath(m.filename_fullpath).
-                    execute();
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
-    static void update_message_in_db_read_rcvd_timestamp_rawmsgbytes(final Message m)
-    {
-        try
-        {
-            orma.updateMessage().
-                    idEq(m.id).
-                    read(m.read).
-                    raw_msgv2_bytes(m.raw_msgv2_bytes).
-                    rcvd_timestamp(m.rcvd_timestamp).
-                    execute();
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
-    static void change_notification(int a_TOXCONNECTION)
-    {
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-        // crash_app_java(1);
-        // crash_app_C();
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-        // crash -----------------
-
-        Log.i(TAG, "change_notification");
-        final int a_TOXCONNECTION_f = a_TOXCONNECTION;
-        try
-        {
-            Thread t = new Thread()
-            {
-                @Override
-                public void run()
-                {
-                    long counter = 0;
-                    while (tox_service_fg == null)
-                    {
-                        counter++;
-                        if (counter > 10)
-                        {
-                            break;
-                        }
-                        // Log.i(TAG, "change_notification:sleep");
-
-                        try
-                        {
-                            Thread.sleep(100);
-                        }
-                        catch (Exception e)
-                        {
-                            // e.printStackTrace();
-                        }
-                    }
-                    Log.i(TAG, "change_notification:change");
-                    try
-                    {
-                        tox_service_fg.change_notification_fg(a_TOXCONNECTION_f);
-                    }
-                    catch (Exception e)
-                    {
-                        e.printStackTrace();
-                    }
-                }
-            };
-            t.start();
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-        }
-    }
-
     @Override
     public void onBackPressed()
     {
@@ -2570,6 +2252,8 @@ public class MainActivity extends AppCompatActivity
 
     public static native String tox_self_get_status_message();
 
+    public static native int tox_friend_send_lossless_packet(long friend_number, @NonNull byte[] data, int data_length);
+
     public static native int tox_file_control(long friend_number, long file_number, int a_TOX_FILE_CONTROL);
 
     public static native int tox_hash(ByteBuffer hash_buffer, ByteBuffer data_buffer, long data_length);
@@ -2592,7 +2276,15 @@ public class MainActivity extends AppCompatActivity
 
     public static native int tox_messagev2_get_message_id(ByteBuffer raw_message_buffer, ByteBuffer msgid_buffer);
 
-    public static native int tox_messagev2_get_message_text(ByteBuffer raw_message_buffer, long raw_message_len, int is_alter_msg, long alter_type, ByteBuffer message_text_buffer);
+    public static native long tox_messagev2_get_ts_sec(ByteBuffer raw_message_buffer);
+
+    public static native long tox_messagev2_get_ts_ms(ByteBuffer raw_message_buffer);
+
+    public static native long tox_messagev2_get_message_text(ByteBuffer raw_message_buffer, long raw_message_len, int is_alter_msg, long alter_type, ByteBuffer message_text_buffer);
+
+    public static native String tox_messagev2_get_sync_message_pubkey(ByteBuffer raw_message_buffer);
+
+    public static native long tox_messagev2_get_sync_message_type(ByteBuffer raw_message_buffer);
 
     public static native int tox_util_friend_send_msg_receipt_v2(long friend_number, long ts_sec, ByteBuffer msgid_buffer);
 
@@ -2657,6 +2349,8 @@ public class MainActivity extends AppCompatActivity
     public static native int toxav_video_send_frame_uv_reversed(long friendnum, int frame_width_px, int frame_height_px);
 
     public static native int toxav_video_send_frame(long friendnum, int frame_width_px, int frame_height_px);
+
+    public static native int toxav_video_send_frame_h264(long friendnum, int frame_width_px, int frame_height_px, long data_len);
 
     public static native int toxav_option_set(long friendnum, long a_TOXAV_OPTIONS_OPTION, long value);
 
@@ -2803,9 +2497,7 @@ public class MainActivity extends AppCompatActivity
         //              "toxav_video_receive_frame:from=" + friend_number + " video width=" + frame_width_px + " video height=" +
         //              frame_height_px + " call_first_video_frame_received=" + Callstate.call_first_video_frame_received);
 
-        if ((Callstate.call_first_video_frame_received == -1) || (Callstate.frame_width_px != frame_width_px) ||
-            (Callstate.frame_height_px != frame_height_px) || (Callstate.ystride != ystride) ||
-            (Callstate.ustride != ustride) || (Callstate.vstride != vstride))
+        if ((Callstate.call_first_video_frame_received == -1) || (Callstate.frame_width_px != frame_width_px) || (Callstate.frame_height_px != frame_height_px) || (Callstate.ystride != ystride) || (Callstate.ustride != ustride) || (Callstate.vstride != vstride))
         {
 
             //            Log.i(TAG, "toxav_video_receive_frame:from=" + friend_number + " video width=" + frame_width_px +
@@ -2818,9 +2510,7 @@ public class MainActivity extends AppCompatActivity
             // allocate new video buffer on 1 frame
             allocate_video_buffer_1((int) frame_width_px, (int) frame_height_px, ystride, ustride, vstride);
 
-            temp_string_a =
-                    "" + (int) ((Callstate.call_first_video_frame_received - Callstate.call_start_timestamp) / 1000) +
-                    "s";
+            temp_string_a = "" + (int) ((Callstate.call_first_video_frame_received - Callstate.call_start_timestamp) / 1000) + "s";
             CallingActivity.update_top_text_line(temp_string_a, 3);
 
             Callstate.frame_width_px = frame_width_px;
@@ -2833,8 +2523,7 @@ public class MainActivity extends AppCompatActivity
         {
             if ((count_video_frame_received > 20) || ((last_video_frame_sent + 2000) < System.currentTimeMillis()))
             {
-                VIDEO_FRAME_RATE_INCOMING = (int) ((((float) count_video_frame_received / ((float) (
-                        (System.currentTimeMillis() - last_video_frame_received) / 1000.0f))) / 1.0f) + 0.5);
+                VIDEO_FRAME_RATE_INCOMING = (int) ((((float) count_video_frame_received / ((float) ((System.currentTimeMillis() - last_video_frame_received) / 1000.0f))) / 1.0f) + 0.5);
                 // Log.i(TAG, "VIDEO_FRAME_RATE_INCOMING=" + VIDEO_FRAME_RATE_INCOMING + " fps");
                 update_fps();
                 last_video_frame_received = System.currentTimeMillis();
@@ -2950,8 +2639,7 @@ public class MainActivity extends AppCompatActivity
         }
 
         Log.i(TAG,
-              "toxav_bit_rate_status:from=" + friend_number + " audio_bit_rate=" + audio_bit_rate + " video_bit_rate=" +
-              video_bit_rate);
+              "toxav_bit_rate_status:from=" + friend_number + " audio_bit_rate=" + audio_bit_rate + " video_bit_rate=" + video_bit_rate);
 
         // TODO: suggested bitrates!!!! ---------------
         if (Callstate.state == 1)
@@ -3100,20 +2788,15 @@ public class MainActivity extends AppCompatActivity
             channels_ = channels;
 
             Log.i(TAG,
-                  "audio_play:read:init sample_count=" + sample_count + " channels=" + channels + " sampling_rate=" +
-                  sampling_rate);
+                  "audio_play:read:init sample_count=" + sample_count + " channels=" + channels + " sampling_rate=" + sampling_rate);
 
 
-            temp_string_a =
-                    "" + (int) ((Callstate.call_first_audio_frame_received - Callstate.call_start_timestamp) / 1000) +
-                    "s";
+            temp_string_a = "" + (int) ((Callstate.call_first_audio_frame_received - Callstate.call_start_timestamp) / 1000) + "s";
             CallingActivity.update_top_text_line(temp_string_a, 4);
 
             // HINT: PCM_16 needs 2 bytes per sample per channel
-            AudioReceiver.buffer_size =
-                    ((int) ((sample_count * channels) * 2)) * audio_out_buffer_mult; // TODO: this is really bad
-            AudioReceiver.sleep_millis = (int) (((float) sample_count / (float) sampling_rate) * 1000.0f *
-                                                0.9f); // TODO: this is bad also
+            AudioReceiver.buffer_size = ((int) ((sample_count * channels) * 2)) * audio_out_buffer_mult; // TODO: this is really bad
+            AudioReceiver.sleep_millis = (int) (((float) sample_count / (float) sampling_rate) * 1000.0f * 0.9f); // TODO: this is bad also
             Log.i(TAG, "audio_play:read:init buffer_size=" + AudioReceiver.buffer_size);
             Log.i(TAG, "audio_play:read:init sleep_millis=" + AudioReceiver.sleep_millis);
 
@@ -3200,16 +2883,14 @@ public class MainActivity extends AppCompatActivity
 
                 if (NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf] < NativeAudio.n_buf_size_in_bytes)
                 {
-                    int remain_bytes = incoming_bytes - (NativeAudio.n_buf_size_in_bytes -
-                                                         NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf]);
+                    int remain_bytes = incoming_bytes - (NativeAudio.n_buf_size_in_bytes - NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf]);
                     int remain_start_pos = (incoming_bytes - remain_bytes);
                     NativeAudio.n_audio_buffer[NativeAudio.n_cur_buf].position(
                             NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf]);
                     NativeAudio.n_audio_buffer[NativeAudio.n_cur_buf].put(audio_buffer_2[0].array(),
                                                                           audio_buffer_2[0].arrayOffset(),
                                                                           Math.min(incoming_bytes,
-                                                                                   NativeAudio.n_buf_size_in_bytes -
-                                                                                   NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf]));
+                                                                                   NativeAudio.n_buf_size_in_bytes - NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf]));
 
                     // Log.i(TAG, "audio_play:NativeAudio:put 1:remain_bytes=" + remain_bytes);
 
@@ -3273,8 +2954,7 @@ public class MainActivity extends AppCompatActivity
                     }
                     else
                     {
-                        NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf] =
-                                NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf] + incoming_bytes;
+                        NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf] = NativeAudio.n_bytes_in_buffer[NativeAudio.n_cur_buf] + incoming_bytes;
 
                         //                            for (int j = 0; j < NativeAudio.n_buf_size_in_bytes - 1; j++)
                         //                            {
@@ -3481,145 +3161,54 @@ public class MainActivity extends AppCompatActivity
         FriendList f = main_get_friend(friend_number);
         if (f != null)
         {
+            if (f.TOX_CONNECTION_real != a_TOX_CONNECTION)
+            {
+                f.TOX_CONNECTION_real = a_TOX_CONNECTION;
+                f.TOX_CONNECTION_on_off_real = get_toxconnection_wrapper(f.TOX_CONNECTION);
+
+                update_friend_in_db_connection_status_real(f);
+            }
+
             if (f.TOX_CONNECTION != a_TOX_CONNECTION)
             {
                 if (f.TOX_CONNECTION == TOX_CONNECTION_NONE.value)
                 {
-
-                    final long friend_number_ = friend_number;
-                    final Runnable myRunnable = new Runnable()
+                    // ******** friend just came online ********
+                    if (have_own_relay())
                     {
-                        @Override
-                        public void run()
+                        if (!is_any_relay(f.tox_public_key_string))
                         {
-                            try
-                            {
-                                // friend just came online
-                                if (VFS_ENCRYPT)
-                                {
-                                    String fname = get_vfs_image_filename_own_avatar();
-                                    if (fname != null)
-                                    {
-                                        ByteBuffer avatar_bytes = file_to_bytebuffer(fname, true);
-                                        if (avatar_bytes != null)
-                                        {
-                                            // Log.i(TAG, "android_tox_callback_friend_connection_status_cb_method:avatar_bytes=" + bytes_to_hex(avatar_bytes));
-
-                                            ByteBuffer hash_bytes = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
-                                            int res = tox_hash(hash_bytes, avatar_bytes, avatar_bytes.capacity());
-                                            if (res == 0)
-                                            {
-                                                // Log.i(TAG,
-                                                //       "android_tox_callback_friend_connection_status_cb_method:hash(1)=" +
-                                                //       bytes_to_hex(hash_bytes));
-
-
-                                                // send avatar to friend -------
-                                                long filenum = tox_file_send(friend_number_, TOX_FILE_KIND_AVATAR.value,
-                                                                             avatar_bytes.capacity(), hash_bytes,
-                                                                             "avatar.png", "avatar.png".length());
-                                                Log.i(TAG,
-                                                      "android_tox_callback_friend_connection_status_cb_method:filenum=" +
-                                                      filenum);
-
-                                                // save FT to db ---------------
-                                                Filetransfer ft_avatar_outgoing = new Filetransfer();
-                                                ft_avatar_outgoing.tox_public_key_string = tox_friend_get_public_key__wrapper(
-                                                        friend_number_);
-                                                ft_avatar_outgoing.direction = TRIFA_FT_DIRECTION_OUTGOING.value;
-                                                ft_avatar_outgoing.file_number = filenum;
-                                                ft_avatar_outgoing.kind = TOX_FILE_KIND_AVATAR.value;
-                                                ft_avatar_outgoing.filesize = avatar_bytes.capacity();
-                                                long rowid = insert_into_filetransfer_db(ft_avatar_outgoing);
-                                                ft_avatar_outgoing.id = rowid;
-                                            }
-                                            else
-                                            {
-                                                Log.i(TAG,
-                                                      "android_tox_callback_friend_connection_status_cb_method:tox_hash res=" +
-                                                      res);
-                                            }
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    // TODO: write code
-                                }
-                            }
-                            catch (Exception e)
-                            {
-                                e.printStackTrace();
-                            }
+                            send_relay_pubkey_to_friend(get_own_relay_pubkey(), f.tox_public_key_string);
+                            Log.i(TAG, "send relay pubkey to friend");
                         }
-                    };
-                    main_handler_s.post(myRunnable);
+                        else
+                        {
+                            send_friend_pubkey_to_relay(get_own_relay_pubkey(), f.tox_public_key_string);
+                            Log.i(TAG, "send friend pubkey to relay");
+                        }
+                    }
                 }
             }
 
-            if (f != null)
+            if (is_any_relay(f.tox_public_key_string))
             {
-                if (f.TOX_CONNECTION != a_TOX_CONNECTION)
+                if (!is_own_relay(f.tox_public_key_string))
                 {
-                    if (a_TOX_CONNECTION == TOX_CONNECTION_NONE.value)
+                    FriendList f_real = get_friend_for_relay(f.tox_public_key_string);
+                    if (f_real != null)
                     {
-                        // friend going offline
-                        Log.i(TAG, "friend going offline:" + System.currentTimeMillis());
-                        f.last_online_timestamp = System.currentTimeMillis();
-                        update_friend_in_db_last_online_timestamp(f);
-                    }
-                    else
-                    {
-                        // friend coming online
-                        Log.i(TAG, "friend coming online:" + LAST_ONLINE_TIMSTAMP_ONLINE_NOW);
-                        f.last_online_timestamp = LAST_ONLINE_TIMSTAMP_ONLINE_NOW;
-                        update_friend_in_db_last_online_timestamp(f);
+                        update_friend_connection_status_helper(a_TOX_CONNECTION, f_real, true);
                     }
                 }
             }
 
-            f.TOX_CONNECTION = a_TOX_CONNECTION;
-            f.TOX_CONNECTION_on_off = get_toxconnection_wrapper(f.TOX_CONNECTION);
+            update_friend_connection_status_helper(a_TOX_CONNECTION, f, false);
 
-            update_friend_in_db_connection_status(f);
-
-            try
+            if (f.TOX_CONNECTION_real != a_TOX_CONNECTION)
             {
-                if (message_list_activity != null)
-                {
-                    if (message_list_activity.get_current_friendnum() == friend_number)
-                    {
-                        message_list_activity.set_friend_connection_status_icon();
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                e.printStackTrace();
-            }
-
-            try
-            {
-                if (friend_list_fragment != null)
-                {
-                    // TODO: dirty hack, make better
-                    final boolean sorted_reload = true;
-                    if (!sorted_reload)
-                    {
-                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
-                        cc.is_friend = true;
-                        cc.friend_item = f;
-                        friend_list_fragment.modify_friend(cc, cc.is_friend);
-                    }
-                    else
-                    {
-                        friend_list_fragment.add_all_friends_clear(0);
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                e.printStackTrace();
+                f.TOX_CONNECTION_real = a_TOX_CONNECTION;
+                f.TOX_CONNECTION_on_off_real = get_toxconnection_wrapper(f.TOX_CONNECTION);
+                update_friend_in_db_connection_status_real(f);
             }
         }
 
@@ -3783,532 +3372,116 @@ public class MainActivity extends AppCompatActivity
     static void android_tox_callback_friend_request_cb_method(String friend_public_key, String friend_request_message, long length)
     {
         Log.i(TAG, "friend_request:friend:" + friend_public_key + " friend request message:" + friend_request_message);
-        Log.i(TAG, "friend_request:friend:" + friend_public_key.substring(0, TOX_PUBLIC_KEY_SIZE * 2) +
-                   " friend request message:" + friend_request_message);
+        Log.i(TAG, "friend_request:friend:" + friend_public_key.substring(0,
+                                                                          TOX_PUBLIC_KEY_SIZE * 2) + " friend request message:" + friend_request_message);
 
-        final String friend_public_key__final = friend_public_key.substring(0, TOX_PUBLIC_KEY_SIZE * 2);
-
-        Thread t = new Thread()
-        {
-            @Override
-            public void run()
-            {
-                try
-                {
-                    // toxcore needs this!!
-                    Thread.sleep(120);
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
-                }
-
-                // ---- auto add all friends ----
-                // ---- auto add all friends ----
-                // ---- auto add all friends ----
-                long friendnum = tox_friend_add_norequest(friend_public_key__final); // add friend
-
-                try
-                {
-                    Thread.sleep(20);
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
-                }
-                update_savedata_file_wrapper(); // save toxcore datafile (new friend added)
-
-                final FriendList f = new FriendList();
-                f.tox_public_key_string = friend_public_key__final;
-                f.TOX_USER_STATUS = 0;
-                f.TOX_CONNECTION = 0;
-                f.TOX_CONNECTION_on_off = get_toxconnection_wrapper(f.TOX_CONNECTION);
-                // set name as the last 5 char of the publickey (until we get a proper name)
-                f.name = friend_public_key__final.substring(friend_public_key__final.length() - 5,
-                                                            friend_public_key__final.length());
-                f.avatar_pathname = null;
-                f.avatar_filename = null;
-
-                try
-                {
-                    Log.i(TAG, "friend_request:insert:001:f=" + f);
-                    long res = orma.insertIntoFriendList(f);
-                    Log.i(TAG, "friend_request:insert:002:res=" + res);
-                }
-                catch (android.database.sqlite.SQLiteConstraintException e)
-                {
-                    e.printStackTrace();
-                    Log.i(TAG, "friend_request:insert:EE1:" + e.getMessage());
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
-                    Log.i(TAG, "friend_request:insert:EE2:" + e.getMessage());
-                }
-
-                if (friend_list_fragment != null)
-                {
-                    Log.i(TAG, "friend_request:003");
-                    CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
-                    cc.is_friend = true;
-                    cc.friend_item = f;
-                    friend_list_fragment.modify_friend(cc, cc.is_friend);
-                }
-
-                // ---- auto add all friends ----
-                // ---- auto add all friends ----
-                // ---- auto add all friends ----
-
-                try
-                {
-                    Thread.sleep(100);
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
-                }
-
-                if (PREF__U_keep_nospam == false)
-                {
-                    // ---- set new random nospam value after each added friend ----
-                    // ---- set new random nospam value after each added friend ----
-                    // ---- set new random nospam value after each added friend ----
-                    set_new_random_nospam_value();
-                    // ---- set new random nospam value after each added friend ----
-                    // ---- set new random nospam value after each added friend ----
-                    // ---- set new random nospam value after each added friend ----
-                }
-            }
-        };
-        t.start();
+        String friend_public_key__ = friend_public_key.substring(0, TOX_PUBLIC_KEY_SIZE * 2);
+        add_friend_to_system(friend_public_key__, false, null);
     }
-
 
     static void android_tox_callback_friend_message_v2_cb_method(long friend_number, String friend_message, long length, long ts_sec, long ts_ms, byte[] raw_message, long raw_message_length)
     {
-        // Log.i(TAG,
-        //      "friend_message_v2:friend:" + friend_number + " ts:" + ts_sec + " systime" + System.currentTimeMillis() +
-        //      " message:" + friend_message);
+        receive_incoming_message(1, friend_number, friend_message, raw_message, raw_message_length, null);
+    }
 
-        // if message list for this friend is open, then don't do notification and "new" badge
-        boolean do_notification = true;
-        boolean do_badge_update = true;
-        // Log.i(TAG, "noti_and_badge:001:" + message_list_activity);
-        if (message_list_activity != null)
+    static void android_tox_callback_friend_lossless_packet_cb_method(long friend_number, byte[] data, long length)
+    {
+        Log.i(TAG, "friend_lossless_packet_cb:fn=" + friend_number + " len=" + length + " data=" + bytes_to_hex(data));
+        if (length > 0)
         {
-            // Log.i(TAG, "noti_and_badge:002:" + message_list_activity.get_current_friendnum() + ":" + friend_number);
-            if (message_list_activity.get_current_friendnum() == friend_number)
+            if (data[0] == (byte) CONTROL_PROXY_MESSAGE_TYPE_PROXY_PUBKEY_FOR_FRIEND.value)
             {
-                // Log.i(TAG, "noti_and_badge:003:");
-                // no notifcation and no badge update
-                do_notification = false;
-                do_badge_update = false;
+                if (length == (TOX_PUBLIC_KEY_SIZE + 1))
+                {
+                    Log.i(TAG, "friend_lossless_packet_cb:recevied CONTROL_PROXY_MESSAGE_TYPE_PROXY_PUBKEY_FOR_FRIEND");
+                    String relay_pubkey = bytes_to_hex(data).substring(2);
+                    Log.i(TAG, "friend_lossless_packet_cb:recevied pubkey:" + relay_pubkey);
+
+                    add_friend_to_system(relay_pubkey.toUpperCase(), true,
+                                         tox_friend_get_public_key__wrapper(friend_number));
+                }
             }
         }
+    }
+
+    static void android_tox_callback_friend_sync_message_v2_cb_method(long friend_number, long ts_sec, long ts_ms, byte[] raw_message, long raw_message_length, byte[] raw_data, long raw_data_length)
+    {
+        Log.i(TAG, "friend_sync_message_v2_cb:fn=" + friend_number + " full rawmsg    =" + bytes_to_hex(raw_message));
+        Log.i(TAG, "friend_sync_message_v2_cb:fn=" + friend_number + " wrapped rawdata=" + bytes_to_hex(raw_data));
+
+        ByteBuffer raw_message_buf_wrapped = ByteBuffer.allocateDirect((int) raw_data_length);
+        raw_message_buf_wrapped.put(raw_data, 0, (int) raw_data_length);
 
         ByteBuffer raw_message_buf = ByteBuffer.allocateDirect((int) raw_message_length);
         raw_message_buf.put(raw_message, 0, (int) raw_message_length);
+
+        long msg_sec = tox_messagev2_get_ts_sec(raw_message_buf);
+        long msg_ms = tox_messagev2_get_ts_ms(raw_message_buf);
+        Log.i(TAG, "friend_sync_message_v2_cb:sec=" + msg_sec + " ms=" + msg_ms);
+
+
         ByteBuffer msg_id_buffer = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
         tox_messagev2_get_message_id(raw_message_buf, msg_id_buffer);
-
         String msg_id_as_hex_string = bytesToHex(msg_id_buffer.array(), msg_id_buffer.arrayOffset(),
                                                  msg_id_buffer.limit());
-        // Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:MSGv2HASH:2=" + msg_id_as_hex_string);
+        Log.i(TAG, "friend_sync_message_v2_cb:MSGv2HASH=" + msg_id_as_hex_string);
 
-        int already_have_message = orma.selectFromMessage().tox_friendpubkeyEq(
-                tox_friend_get_public_key__wrapper(friend_number)).and().msg_id_hashEq(msg_id_as_hex_string).count();
-        if (already_have_message > 0)
-        {
-            // it's a double send, ignore it
-            // send message receipt v2, most likely the other party did not get it yet
-            // TODO: use received timstamp, not "now" here!
-            long t_sec_receipt = (System.currentTimeMillis() / 1000);
-            tox_util_friend_send_msg_receipt_v2(friend_number, t_sec_receipt, msg_id_buffer);
-            return;
-        }
+        String real_sender_as_hex_string = tox_messagev2_get_sync_message_pubkey(raw_message_buf);
+        Log.i(TAG, "friend_sync_message_v2_cb:real sender pubkey=" + real_sender_as_hex_string);
 
-        // add FT message to UI
-        Message m = new Message();
-
-        if (!do_badge_update)
-        {
-            Log.i(TAG, "noti_and_badge:004a:");
-            m.is_new = false;
-        }
-        else
-        {
-            Log.i(TAG, "noti_and_badge:004b:");
-            m.is_new = true;
-        }
+        long msgv2_type = tox_messagev2_get_sync_message_type(raw_message_buf);
+        Log.i(TAG, "friend_sync_message_v2_cb:msg type=" + ToxVars.TOX_FILE_KIND.value_str((int) msgv2_type));
 
 
-        m.tox_friendpubkey = tox_friend_get_public_key__wrapper(friend_number);
-        m.direction = 0; // msg received
-        m.TOX_MESSAGE_TYPE = 0;
-        m.TRIFA_MESSAGE_TYPE = TRIFA_MSG_TYPE_TEXT.value;
-        m.filetransfer_id = -1;
-        m.filedb_id = -1;
-        m.state = TOX_FILE_CONTROL_RESUME.value;
-        m.ft_accepted = false;
-        m.ft_outgoing_started = false;
-        m.sent_timestamp = (ts_sec * 1000); // sent time as unix timestamp -> convert to milliseconds
-        m.sent_timestamp_ms = ts_ms; // "ms" part of timestamp (could be just an increasing number)
-        m.rcvd_timestamp = System.currentTimeMillis();
-        m.rcvd_timestamp_ms = 0;
-        m.text = friend_message;
-        m.msg_version = 1;
-        m.msg_id_hash = msg_id_as_hex_string;
+        ByteBuffer msg_id_buffer_wrapped = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
+        tox_messagev2_get_message_id(raw_message_buf_wrapped, msg_id_buffer_wrapped);
+        String msg_id_as_hex_string_wrapped = bytesToHex(msg_id_buffer_wrapped.array(),
+                                                         msg_id_buffer_wrapped.arrayOffset(),
+                                                         msg_id_buffer_wrapped.limit());
+        Log.i(TAG, "friend_sync_message_v2_cb:MSGv2HASH=" + msg_id_as_hex_string_wrapped);
 
-        Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:" + long_date_time_format(m.rcvd_timestamp));
 
-        if (message_list_activity != null)
-        {
-            if (message_list_activity.get_current_friendnum() == friend_number)
-            {
-                insert_into_message_db(m, true);
-            }
-            else
-            {
-                insert_into_message_db(m, false);
-            }
-        }
-        else
-        {
-            insert_into_message_db(m, false);
-        }
+        long msg_wrapped_sec = tox_messagev2_get_ts_sec(raw_message_buf_wrapped);
+        long msg_wrapped_ms = tox_messagev2_get_ts_ms(raw_message_buf_wrapped);
+        Log.i(TAG, "friend_sync_message_v2_cb:sec=" + msg_wrapped_sec + " ms=" + msg_wrapped_ms);
 
-        // send message receipt v2
-        long t_sec_receipt = (System.currentTimeMillis() / 1000);
-        tox_util_friend_send_msg_receipt_v2(friend_number, t_sec_receipt, msg_id_buffer);
+        ByteBuffer msg_text_buffer_wrapped = ByteBuffer.allocateDirect((int) raw_data_length);
+        long text_length = tox_messagev2_get_message_text(raw_message_buf_wrapped, raw_data_length, 0, 0,
+                                                          msg_text_buffer_wrapped);
 
+        String wrapped_msg_text_as_string = "";
         try
         {
-            // update "new" status on friendlist fragment
-            FriendList f = orma.selectFromFriendList().tox_public_key_stringEq(m.tox_friendpubkey).toList().get(0);
-            if (friend_list_fragment != null)
-            {
-                if (f != null)
-                {
-                    CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
-                    cc.is_friend = true;
-                    cc.friend_item = f;
-                    friend_list_fragment.modify_friend(cc, cc.is_friend);
-                }
-            }
-
-            if (f.notification_silent)
-            {
-                do_notification = false;
-            }
-
+            wrapped_msg_text_as_string = new String(msg_text_buffer_wrapped.array(),
+                                                    msg_text_buffer_wrapped.arrayOffset(), (int) text_length, "UTF-8");
         }
         catch (Exception e)
         {
             e.printStackTrace();
-            Log.i(TAG, "update *new* status:EE1:" + e.getMessage());
         }
 
-        if (do_notification)
-        {
-            Log.i(TAG, "noti_and_badge:005:");
+        String msg_text_as_hex_string_wrapped = bytesToHex(msg_text_buffer_wrapped.array(),
+                                                           msg_text_buffer_wrapped.arrayOffset(),
+                                                           msg_text_buffer_wrapped.limit());
+        Log.i(TAG,
+              "friend_sync_message_v2_cb:len=" + text_length + " wrapped msg text str=" + wrapped_msg_text_as_string);
+        Log.i(TAG, "friend_sync_message_v2_cb:wrapped msg text hex=" + msg_text_as_hex_string_wrapped);
 
-            // start "new" notification
-            Runnable myRunnable = new Runnable()
-            {
-                @Override
-                public void run()
-                {
-                    try
-                    {
-                        // allow notification every n seconds
-                        if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) <
-                            System.currentTimeMillis())
-                        {
+        //receive_proxy_friend_message(tox_friend_by_public_key__wrapper(real_sender_as_hex_string),
+        //                             wrapped_msg_text_as_string);
 
-                            if (PREF__notification)
-                            {
-                                Notification_new_message_last_shown_timestamp = System.currentTimeMillis();
-
-                                Intent notificationIntent = new Intent(context_s, StartMainActivityWrapper.class);
-                                notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                PendingIntent pendingIntent = PendingIntent.getActivity(context_s, 0,
-                                                                                        notificationIntent, 0);
-
-                                // -- notification ------------------
-                                // -- notification ------------------
-                                NotificationCompat.Builder b;
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
-                                {
-                                    if ((PREF__notification_sound) && (PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_sound_and_vibrate);
-                                    }
-                                    else if ((PREF__notification_sound) && (!PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_sound);
-                                    }
-                                    else if ((!PREF__notification_sound) && (PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_vibrate);
-                                    }
-                                    else
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_silent);
-                                    }
-                                }
-                                else
-                                {
-                                    b = new NotificationCompat.Builder(context_s);
-                                }
-                                b.setContentIntent(pendingIntent);
-                                b.setSmallIcon(R.drawable.circle_orange);
-                                b.setLights(Color.parseColor("#ffce00"), 500, 500);
-                                Uri default_notification_sound = RingtoneManager.getDefaultUri(
-                                        RingtoneManager.TYPE_NOTIFICATION);
-
-                                if (PREF__notification_sound)
-                                {
-                                    b.setSound(default_notification_sound);
-                                }
-
-                                if (PREF__notification_vibrate)
-                                {
-                                    long[] vibrate_pattern = {100, 300};
-                                    b.setVibrate(vibrate_pattern);
-                                }
-
-                                b.setContentTitle("TRIfA");
-                                b.setAutoCancel(true);
-                                b.setContentText("new Message");
-
-                                Notification notification3 = b.build();
-                                nmn3.notify(Notification_new_message_ID, notification3);
-                                // -- notification ------------------
-                                // -- notification ------------------
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        e.printStackTrace();
-                    }
-                }
-            };
-
-            try
-            {
-                if (main_handler_s != null)
-                {
-                    main_handler_s.post(myRunnable);
-                }
-            }
-            catch (Exception e)
-            {
-            }
-        }
-
+        receive_incoming_message(2, tox_friend_by_public_key__wrapper(real_sender_as_hex_string),
+                                 wrapped_msg_text_as_string, raw_message, raw_message_length,
+                                 real_sender_as_hex_string);
 
     }
-
 
     // --- incoming message ---
     // --- incoming message ---
     // --- incoming message ---
     static void android_tox_callback_friend_message_cb_method(long friend_number, int message_type, String friend_message, long length)
     {
-        // Log.i(TAG, "friend_message:friend:" + friend_number + " message:" + friend_message);
-
-        // if message list for this friend is open, then don't do notification and "new" badge
-        boolean do_notification = true;
-        boolean do_badge_update = true;
-        // Log.i(TAG, "noti_and_badge:001:" + message_list_activity);
-        if (message_list_activity != null)
-        {
-            // Log.i(TAG, "noti_and_badge:002:" + message_list_activity.get_current_friendnum() + ":" + friend_number);
-            if (message_list_activity.get_current_friendnum() == friend_number)
-            {
-                // Log.i(TAG, "noti_and_badge:003:");
-                // no notifcation and no badge update
-                do_notification = false;
-                do_badge_update = false;
-            }
-        }
-
-        Message m = new Message();
-
-        if (!do_badge_update)
-        {
-            Log.i(TAG, "noti_and_badge:004a:");
-            m.is_new = false;
-        }
-        else
-        {
-            Log.i(TAG, "noti_and_badge:004b:");
-            m.is_new = true;
-        }
-
-        // m.tox_friendnum = friend_number;
-        m.tox_friendpubkey = tox_friend_get_public_key__wrapper(friend_number);
-        m.direction = 0; // msg received
-        m.TOX_MESSAGE_TYPE = 0;
-        m.read = false;
-        m.TRIFA_MESSAGE_TYPE = TRIFA_MSG_TYPE_TEXT.value;
-        m.rcvd_timestamp = System.currentTimeMillis();
-        m.rcvd_timestamp_ms = 0;
-        m.sent_timestamp = System.currentTimeMillis();
-        m.sent_timestamp_ms = 0;
-        m.text = friend_message;
-        m.msg_version = 0;
-
-        if (message_list_activity != null)
-        {
-            if (message_list_activity.get_current_friendnum() == friend_number)
-            {
-                insert_into_message_db(m, true);
-            }
-            else
-            {
-                insert_into_message_db(m, false);
-            }
-        }
-        else
-        {
-            insert_into_message_db(m, false);
-        }
-
-        try
-        {
-            // update "new" status on friendlist fragment
-            FriendList f = orma.selectFromFriendList().tox_public_key_stringEq(m.tox_friendpubkey).toList().get(0);
-            if (friend_list_fragment != null)
-            {
-                if (f != null)
-                {
-                    CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
-                    cc.is_friend = true;
-                    cc.friend_item = f;
-                    friend_list_fragment.modify_friend(cc, cc.is_friend);
-                }
-            }
-
-            if (f.notification_silent)
-            {
-                do_notification = false;
-            }
-
-        }
-        catch (Exception e)
-        {
-            e.printStackTrace();
-            Log.i(TAG, "update *new* status:EE1:" + e.getMessage());
-        }
-
-        if (do_notification)
-        {
-            Log.i(TAG, "noti_and_badge:005:");
-
-            // start "new" notification
-            Runnable myRunnable = new Runnable()
-            {
-                @Override
-                public void run()
-                {
-                    try
-                    {
-                        // allow notification every n seconds
-                        if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) <
-                            System.currentTimeMillis())
-                        {
-
-                            if (PREF__notification)
-                            {
-                                Notification_new_message_last_shown_timestamp = System.currentTimeMillis();
-
-                                Intent notificationIntent = new Intent(context_s, StartMainActivityWrapper.class);
-                                notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                PendingIntent pendingIntent = PendingIntent.getActivity(context_s, 0,
-                                                                                        notificationIntent, 0);
-
-                                // -- notification ------------------
-                                // -- notification ------------------
-                                NotificationCompat.Builder b;
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
-                                {
-                                    if ((PREF__notification_sound) && (PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_sound_and_vibrate);
-                                    }
-                                    else if ((PREF__notification_sound) && (!PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_sound);
-                                    }
-                                    else if ((!PREF__notification_sound) && (PREF__notification_vibrate))
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_vibrate);
-                                    }
-                                    else
-                                    {
-                                        b = new NotificationCompat.Builder(context_s,
-                                                                           MainActivity.channelId_newmessage_silent);
-                                    }
-                                }
-                                else
-                                {
-                                    b = new NotificationCompat.Builder(context_s);
-                                }
-                                b.setContentIntent(pendingIntent);
-                                b.setSmallIcon(R.drawable.circle_orange);
-                                b.setLights(Color.parseColor("#ffce00"), 500, 500);
-                                Uri default_notification_sound = RingtoneManager.getDefaultUri(
-                                        RingtoneManager.TYPE_NOTIFICATION);
-
-                                if (PREF__notification_sound)
-                                {
-                                    b.setSound(default_notification_sound);
-                                }
-
-                                if (PREF__notification_vibrate)
-                                {
-                                    long[] vibrate_pattern = {100, 300};
-                                    b.setVibrate(vibrate_pattern);
-                                }
-
-                                b.setContentTitle("TRIfA");
-                                b.setAutoCancel(true);
-                                b.setContentText("new Message");
-
-                                Notification notification3 = b.build();
-                                nmn3.notify(Notification_new_message_ID, notification3);
-                                // -- notification ------------------
-                                // -- notification ------------------
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        e.printStackTrace();
-                    }
-                }
-            };
-
-            try
-            {
-                if (main_handler_s != null)
-                {
-                    main_handler_s.post(myRunnable);
-                }
-            }
-            catch (Exception e)
-            {
-            }
-        }
+        receive_incoming_message(0, friend_number, friend_message, null, 0, null);
     }
     // --- incoming message ---
     // --- incoming message ---
@@ -4626,8 +3799,7 @@ public class MainActivity extends AppCompatActivity
     static void android_tox_callback_file_recv_cb_method(long friend_number, long file_number, int a_TOX_FILE_KIND, long file_size, String filename, long filename_length)
     {
         Log.i(TAG,
-              "file_recv:" + friend_number + ":fn==" + file_number + ":" + a_TOX_FILE_KIND + ":" + file_size + ":" +
-              filename + ":" + filename_length);
+              "file_recv:" + friend_number + ":fn==" + file_number + ":" + a_TOX_FILE_KIND + ":" + file_size + ":" + filename + ":" + filename_length);
 
         if (a_TOX_FILE_KIND == TOX_FILE_KIND_AVATAR.value)
         {
@@ -4865,9 +4037,7 @@ public class MainActivity extends AppCompatActivity
                     Log.i(TAG, "file_recv_chunk:file_READY:001a:msg_id=" + msg_id);
 
                     update_message_in_db_filename_fullpath_friendnum_and_filenum(friend_number, file_number,
-                                                                                 VFS_PREFIX + VFS_FILE_DIR + "/" +
-                                                                                 f.tox_public_key_string + "/" +
-                                                                                 f.file_name);
+                                                                                 VFS_PREFIX + VFS_FILE_DIR + "/" + f.tox_public_key_string + "/" + f.file_name);
                     set_message_state_from_friendnum_and_filenum(friend_number, file_number,
                                                                  TOX_FILE_CONTROL_CANCEL.value);
                     set_message_filedb_from_friendnum_and_filenum(friend_number, file_number, filedb_id);
@@ -5034,8 +4204,8 @@ public class MainActivity extends AppCompatActivity
     {
         if (CTOXCORE_NATIVE_LOGGING)
         {
-            Log.i(TAG, "C-TOXCORE:" + ToxVars.TOX_LOG_LEVEL.value_str(a_TOX_LOG_LEVEL) + ":file=" + file + ":linenum=" +
-                       line + ":func=" + function + ":msg=" + message);
+            Log.i(TAG, "C-TOXCORE:" + ToxVars.TOX_LOG_LEVEL.value_str(
+                    a_TOX_LOG_LEVEL) + ":file=" + file + ":linenum=" + line + ":func=" + function + ":msg=" + message);
         }
     }
 
@@ -5056,24 +4226,35 @@ public class MainActivity extends AppCompatActivity
         Log.i(TAG, "conference_connected_cb:cf_num=" + conference_number);
     }
 
-    static void android_tox_callback_conference_invite_cb_method(long friend_number, int a_TOX_CONFERENCE_TYPE, byte[] cookie_buffer, long cookie_length)
+    static void android_tox_callback_conference_invite_cb_method(final long friend_number, final int a_TOX_CONFERENCE_TYPE, final byte[] cookie_buffer, final long cookie_length)
     {
-        Log.i(TAG, "conference_invite_cb:fn=" + friend_number + " type=" + a_TOX_CONFERENCE_TYPE + " cookie_length=" +
-                   cookie_length + " cookie=" + bytes_to_hex(cookie_buffer));
 
+        Log.i(TAG,
+              "conference_invite_cb:fn=" + friend_number + " type=" + a_TOX_CONFERENCE_TYPE + " cookie_length=" + cookie_length + " cookie=" + bytes_to_hex(
+                      cookie_buffer));
+
+        //try
+        //{
+        //Thread t = new Thread()
+        //{
+        // @Override
+        //public void run()
+        //{
         ByteBuffer cookie_buf2 = ByteBuffer.allocateDirect((int) cookie_length);
         cookie_buf2.put(cookie_buffer);
 
         Log.i(TAG, "conference_invite_cb:bytebuffer offset=" + cookie_buf2.arrayOffset());
 
         long conference_num = tox_conference_join(friend_number, cookie_buf2, cookie_length);
+        Log.i(TAG, "conference_invite_cb:tox_conference_join res=" + conference_num);
+
 
         // strip first 3 bytes of cookie to get the conference_id.
         // this is aweful and hardcoded
         String conference_identifier = bytes_to_hex(
                 Arrays.copyOfRange(cookie_buffer, 3, (int) (3 + CONFERENCE_ID_LENGTH)));
 
-        Log.i(TAG, "conference_invite_cb:cookie=" + conference_identifier);
+        Log.i(TAG, "conference_invite_cb:conferenc ID=" + conference_identifier);
 
         if (conference_num >= 0)
         {
@@ -5106,6 +4287,16 @@ public class MainActivity extends AppCompatActivity
         // Log.i(TAG, "load conferences at startup[2]: num=" + num_conferences);
 
         Log.i(TAG, "conference_invite_cb:res=" + conference_num);
+
+        //  }
+        // };
+        // t.start();
+        // }
+        //catch (Exception e)
+        //{
+        //   Log.i(TAG, "callback_conference_invite_cb:EET1:" + e.getMessage());
+        //}
+
     }
 
     static void android_tox_callback_conference_message_cb_method(long conference_number, long peer_number, int a_TOX_MESSAGE_TYPE, String message, long length)
@@ -5242,8 +4433,7 @@ public class MainActivity extends AppCompatActivity
                     try
                     {
                         // allow notification every n seconds
-                        if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) <
-                            System.currentTimeMillis())
+                        if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) < System.currentTimeMillis())
                         {
 
                             if (PREF__notification)
@@ -5335,8 +4525,8 @@ public class MainActivity extends AppCompatActivity
 
     static void android_tox_callback_conference_title_cb_method(long conference_number, long peer_number, String title, long title_length)
     {
-        Log.i(TAG, "conference_title_cb:" + "confnum=" + conference_number + " peernum=" + peer_number + " new_title=" +
-                   title + " title_length=" + title_length);
+        Log.i(TAG,
+              "conference_title_cb:" + "confnum=" + conference_number + " peernum=" + peer_number + " new_title=" + title + " title_length=" + title_length);
 
         try
         {
@@ -5408,6 +4598,8 @@ public class MainActivity extends AppCompatActivity
 
     static void android_tox_callback_conference_peer_name_cb_method(long conference_number, long peer_number, String name, long name_length)
     {
+        Log.i(TAG, "conference_peer_name_cb:cf_num=" + conference_number);
+
         try
         {
             ConferenceDB conf_temp = null;
@@ -5502,8 +4694,7 @@ public class MainActivity extends AppCompatActivity
                             String peer_pubkey_temp2 = tox_conference_peer_get_public_key(conference_number,
                                                                                           peer_number);
                             Log.i(TAG,
-                                  "namelist_change_cb:INFO:" + " 002 " + conference_number + ":" + peer_number + ":" +
-                                  peer_pubkey_temp2);
+                                  "namelist_change_cb:INFO:" + " 002 " + conference_number + ":" + peer_number + ":" + peer_pubkey_temp2);
                             conference_message_list_activity.add_group_user(peer_pubkey_temp2, peer_number,
                                                                             peer_name_temp2);
                             Log.i(TAG, "namelist_change_cb:INFO:" + " 003");
@@ -5546,6 +4737,9 @@ public class MainActivity extends AppCompatActivity
     {
         // TODO: write me ...
         // update all peers in this conference        
+
+        Log.i(TAG, "conference_peer_list_changed_cb:cf_num=" + conference_number);
+
         try
         {
             ConferenceDB conf_temp = null;
@@ -5599,6 +4793,7 @@ public class MainActivity extends AppCompatActivity
     {
         // Log.i(TAG, "namelist_change_cb:" + "confnum=" + conference_number + " peernum=" + peer_number + " state=" + a_TOX_CONFERENCE_STATE_CHANGE);
         // TODO: update peer status
+        Log.i(TAG, "conference_namelist_change_cb:cf_num=" + conference_number);
 
         try
         {
@@ -5704,8 +4899,7 @@ public class MainActivity extends AppCompatActivity
                                 String peer_pubkey_temp2 = tox_conference_peer_get_public_key(conference_number,
                                                                                               peer_number);
                                 Log.i(TAG,
-                                      "namelist_change_cb:INFO:" + " 002.1 " + conference_number + ":" + peer_number +
-                                      ":" + peer_pubkey_temp2);
+                                      "namelist_change_cb:INFO:" + " 002.1 " + conference_number + ":" + peer_number + ":" + peer_pubkey_temp2);
 
                                 conference_message_list_activity.add_group_user(peer_pubkey_temp2, peer_number, null);
                                 // TODO: because here the name is always "Tox User" !!
@@ -5732,8 +4926,7 @@ public class MainActivity extends AppCompatActivity
                                 String peer_pubkey_temp2 = tox_conference_peer_get_public_key(conference_number,
                                                                                               peer_number);
                                 Log.i(TAG,
-                                      "namelist_change_cb:INFO:" + " 002 " + conference_number + ":" + peer_number +
-                                      ":" + peer_pubkey_temp2);
+                                      "namelist_change_cb:INFO:" + " 002 " + conference_number + ":" + peer_number + ":" + peer_pubkey_temp2);
                                 conference_message_list_activity.add_group_user(peer_pubkey_temp2, peer_number,
                                                                                 peer_name_temp2);
                                 Log.i(TAG, "namelist_change_cb:INFO:" + " 003");
@@ -5937,6 +5130,573 @@ public class MainActivity extends AppCompatActivity
 
     }
 
+    static FriendList main_get_friend(long friendnum)
+    {
+
+        String pubkey_temp = tox_friend_get_public_key__wrapper(friendnum);
+        // Log.i(TAG, "main_get_friend:pubkey=" + pubkey_temp + " fnum=" + friendnum);
+
+        FriendList f;
+        List<FriendList> fl = orma.selectFromFriendList().
+                tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friendnum)).
+                toList();
+
+        // Log.i(TAG, "main_get_friend:fl=" + fl + " size=" + fl.size());
+
+        if (fl.size() > 0)
+        {
+            f = fl.get(0);
+            // Log.i(TAG, "main_get_friend:f=" + f);
+        }
+        else
+        {
+            f = null;
+        }
+
+        return f;
+    }
+
+    static int is_friend_online(long friendnum)
+    {
+        try
+        {
+            return (orma.selectFromFriendList().
+                    tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friendnum)).
+                    toList().get(0).TOX_CONNECTION);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+            return 0;
+        }
+    }
+
+    static boolean is_conference_active(String conference_identifier)
+    {
+        try
+        {
+            return (orma.selectFromConferenceDB().
+                    conference_identifierEq(conference_identifier).
+                    toList().get(0).conference_active);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    synchronized static void set_all_friends_offline()
+    {
+        Thread t = new Thread()
+        {
+            @Override
+            public void run()
+            {
+                try
+                {
+                    orma.updateFriendList().
+                            TOX_CONNECTION(0).
+                            execute();
+                }
+                catch (Exception e)
+                {
+                }
+
+                try
+                {
+                    orma.updateFriendList().
+                            TOX_CONNECTION_real(0).
+                            execute();
+                }
+                catch (Exception e)
+                {
+                }
+
+                try
+                {
+                    orma.updateFriendList().
+                            last_online_timestampEq(LAST_ONLINE_TIMSTAMP_ONLINE_NOW).
+                            last_online_timestamp(System.currentTimeMillis()).
+                            execute();
+                }
+                catch (Exception e)
+                {
+                }
+
+                // ------ DEBUG ------
+                // ------ set all friends to "never" seen online ------
+                // ------ DEBUG ------
+                // try
+                // {
+                //     orma.updateFriendList().
+                //             last_online_timestamp(LAST_ONLINE_TIMSTAMP_ONLINE_OFFLINE).
+                //             execute();
+                // }
+                // catch (Exception e)
+                // {
+                // }
+                // ------ DEBUG ------
+                // ------ set all friends to "never" seen online ------
+                // ------ DEBUG ------
+
+
+                try
+                {
+                    friend_list_fragment.set_all_friends_to_offline();
+                }
+                catch (Exception e)
+                {
+                }
+            }
+        };
+        t.start();
+    }
+
+    synchronized static void update_friend_in_db(FriendList f)
+    {
+        orma.updateFriendList().
+                tox_public_key_string(f.tox_public_key_string).
+                name(f.name).
+                status_message(f.status_message).
+                TOX_CONNECTION(f.TOX_CONNECTION).
+                TOX_CONNECTION_on_off(f.TOX_CONNECTION_on_off).
+                TOX_USER_STATUS(f.TOX_USER_STATUS).
+                execute();
+    }
+
+    synchronized static void update_friend_in_db_status_message(FriendList f)
+    {
+        orma.updateFriendList().
+                tox_public_key_stringEq(f.tox_public_key_string).
+                status_message(f.status_message).
+                execute();
+    }
+
+    synchronized static void update_friend_in_db_status(FriendList f)
+    {
+        // Log.i(TAG, "update_friend_in_db_status:f=" + f);
+
+        int numrows = orma.updateFriendList().
+                tox_public_key_stringEq(f.tox_public_key_string).
+                TOX_USER_STATUS(f.TOX_USER_STATUS).
+                execute();
+
+        Log.i(TAG, "update_friend_in_db_status:numrows=" + numrows);
+
+    }
+
+    synchronized static void update_friend_in_db_connection_status(FriendList f)
+    {
+        orma.updateFriendList().
+                tox_public_key_stringEq(f.tox_public_key_string).
+                TOX_CONNECTION(f.TOX_CONNECTION).
+                TOX_CONNECTION_on_off(f.TOX_CONNECTION_on_off).
+                execute();
+    }
+
+    synchronized static void update_friend_in_db_connection_status_real(FriendList f)
+    {
+        try
+        {
+        orma.updateFriendList().
+                tox_public_key_stringEq(f.tox_public_key_string).
+                TOX_CONNECTION_real(f.TOX_CONNECTION_real).
+                TOX_CONNECTION_on_off_real(f.TOX_CONNECTION_on_off_real).
+                execute();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    synchronized static void update_friend_in_db_last_online_timestamp(FriendList f)
+    {
+        // Log.i(TAG, "update_friend_in_db_last_online_timestamp");
+        try
+        {
+            orma.updateFriendList().
+                    tox_public_key_stringEq(f.tox_public_key_string).
+                    last_online_timestamp(f.last_online_timestamp).
+                    execute();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    synchronized static void update_friend_in_db_name(FriendList f)
+    {
+        orma.updateFriendList().
+                tox_public_key_stringEq(f.tox_public_key_string).
+                name(f.name).
+                execute();
+    }
+
+    synchronized static void update_message_in_db(final Message m)
+    {
+        final Thread t = new Thread()
+        {
+            @Override
+            public void run()
+            {
+                try
+                {
+                    orma.updateMessage().
+                            idEq(m.id).
+                            read(m.read).
+                            text(m.text).
+                            sent_timestamp(m.sent_timestamp).
+                            rcvd_timestamp(m.rcvd_timestamp).
+                            filename_fullpath(m.filename_fullpath).
+                            execute();
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+            }
+        };
+        t.start();
+    }
+
+    static void update_message_in_db_filename_fullpath_friendnum_and_filenum(long friend_number, long file_number, String filename_fullpath)
+    {
+        try
+        {
+            long ft_id = orma.selectFromFiletransfer().
+                    tox_public_key_stringEq(tox_friend_get_public_key__wrapper(friend_number)).
+                    and().file_numberEq(file_number).orderByIdDesc().get(0).id;
+
+            update_message_in_db_filename_fullpath_from_id(orma.selectFromMessage().
+                    filetransfer_idEq(ft_id).and().
+                    tox_friendpubkeyEq(tox_friend_get_public_key__wrapper(friend_number)).
+                    get(0).id, filename_fullpath);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    static void update_message_in_db_filename_fullpath_from_id(long msg_id, String filename_fullpath)
+    {
+        try
+        {
+            orma.updateMessage().idEq(msg_id).filename_fullpath(filename_fullpath).execute();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    static void update_message_in_db_filename_fullpath(final Message m)
+    {
+        try
+        {
+            orma.updateMessage().
+                    idEq(m.id).
+                    filename_fullpath(m.filename_fullpath).
+                    execute();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    static void update_message_in_db_read_rcvd_timestamp_rawmsgbytes(final Message m)
+    {
+        try
+        {
+            orma.updateMessage().
+                    idEq(m.id).
+                    read(m.read).
+                    raw_msgv2_bytes(m.raw_msgv2_bytes).
+                    rcvd_timestamp(m.rcvd_timestamp).
+                    execute();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    static void change_notification(int a_TOXCONNECTION)
+    {
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+        // crash_app_java(1);
+        // crash_app_C();
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+        // crash -----------------
+
+        Log.i(TAG, "change_notification");
+        final int a_TOXCONNECTION_f = a_TOXCONNECTION;
+        try
+        {
+            Thread t = new Thread()
+            {
+                @Override
+                public void run()
+                {
+                    long counter = 0;
+                    while (tox_service_fg == null)
+                    {
+                        counter++;
+                        if (counter > 10)
+                        {
+                            break;
+                        }
+                        // Log.i(TAG, "change_notification:sleep");
+
+                        try
+                        {
+                            Thread.sleep(100);
+                        }
+                        catch (Exception e)
+                        {
+                            // e.printStackTrace();
+                        }
+                    }
+                    Log.i(TAG, "change_notification:change");
+                    try
+                    {
+                        tox_service_fg.change_notification_fg(a_TOXCONNECTION_f);
+                    }
+                    catch (Exception e)
+                    {
+                        e.printStackTrace();
+                    }
+                }
+            };
+            t.start();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    public static void update_friend_connection_status_helper(int a_TOX_CONNECTION, FriendList f, boolean from_relay)
+    {
+        final long friend_number_ = tox_friend_by_public_key__wrapper(f.tox_public_key_string);
+        boolean went_online = false;
+
+        if (f.TOX_CONNECTION != a_TOX_CONNECTION)
+        {
+            if ((!from_relay) && (!is_any_relay(f.tox_public_key_string)))
+            {
+                if (f.TOX_CONNECTION == TOX_CONNECTION_NONE.value)
+                {
+                    final Runnable myRunnable = new Runnable()
+                    {
+                        @Override
+                        public void run()
+                        {
+                            try
+                            {
+
+                                if (VFS_ENCRYPT)
+                                {
+                                    String fname = get_vfs_image_filename_own_avatar();
+                                    if (fname != null)
+                                    {
+                                        ByteBuffer avatar_bytes = file_to_bytebuffer(fname, true);
+                                        if (avatar_bytes != null)
+                                        {
+                                            // Log.i(TAG, "android_tox_callback_friend_connection_status_cb_method:avatar_bytes=" + bytes_to_hex(avatar_bytes));
+
+                                            ByteBuffer hash_bytes = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
+                                            int res = tox_hash(hash_bytes, avatar_bytes, avatar_bytes.capacity());
+                                            if (res == 0)
+                                            {
+                                                // Log.i(TAG,
+                                                //       "android_tox_callback_friend_connection_status_cb_method:hash(1)=" +
+                                                //       bytes_to_hex(hash_bytes));
+
+
+                                                // send avatar to friend -------
+                                                long filenum = tox_file_send(friend_number_, TOX_FILE_KIND_AVATAR.value,
+                                                                             avatar_bytes.capacity(), hash_bytes,
+                                                                             "avatar.png", "avatar.png".length());
+                                                Log.i(TAG,
+                                                      "android_tox_callback_friend_connection_status_cb_method:filenum=" + filenum);
+
+                                                // save FT to db ---------------
+                                                Filetransfer ft_avatar_outgoing = new Filetransfer();
+                                                ft_avatar_outgoing.tox_public_key_string = tox_friend_get_public_key__wrapper(
+                                                        friend_number_);
+                                                ft_avatar_outgoing.direction = TRIFA_FT_DIRECTION_OUTGOING.value;
+                                                ft_avatar_outgoing.file_number = filenum;
+                                                ft_avatar_outgoing.kind = TOX_FILE_KIND_AVATAR.value;
+                                                ft_avatar_outgoing.filesize = avatar_bytes.capacity();
+                                                long rowid = insert_into_filetransfer_db(ft_avatar_outgoing);
+                                                ft_avatar_outgoing.id = rowid;
+                                            }
+                                            else
+                                            {
+                                                Log.i(TAG,
+                                                      "android_tox_callback_friend_connection_status_cb_method:tox_hash res=" + res);
+                                            }
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    // TODO: write code
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                e.printStackTrace();
+                            }
+                        }
+                    };
+                    main_handler_s.post(myRunnable);
+                }
+            }
+        }
+
+        if (f.TOX_CONNECTION != a_TOX_CONNECTION)
+        {
+            if (a_TOX_CONNECTION == TOX_CONNECTION_NONE.value)
+            {
+                // ******** friend going offline ********
+                Log.i(TAG, "friend_connection_status:friend going offline:" + System.currentTimeMillis());
+            }
+            else
+            {
+                went_online = true;
+                // ******** friend coming online ********
+                Log.i(TAG, "friend_connection_status:friend coming online:" + LAST_ONLINE_TIMSTAMP_ONLINE_NOW);
+            }
+        }
+
+        f.last_online_timestamp = System.currentTimeMillis();
+        update_friend_in_db_last_online_timestamp(f);
+
+        if (went_online)
+        {
+            Log.i(TAG, "friend_connection_status:friend status seems: ONLINE");
+
+            f.TOX_CONNECTION = a_TOX_CONNECTION;
+            f.TOX_CONNECTION_on_off = get_toxconnection_wrapper(f.TOX_CONNECTION);
+
+            update_friend_in_db_connection_status(f);
+
+            try
+            {
+                if (message_list_activity != null)
+                {
+                    if (message_list_activity.get_current_friendnum() == friend_number_)
+                    {
+                        message_list_activity.set_friend_connection_status_icon();
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+            }
+
+            try
+            {
+                if (friend_list_fragment != null)
+                {
+                    // TODO: dirty hack, make better
+                    final boolean sorted_reload = true;
+                    if (!sorted_reload)
+                    {
+                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                        cc.is_friend = true;
+                        cc.friend_item = f;
+                        friend_list_fragment.modify_friend(cc, cc.is_friend);
+                    }
+                    else
+                    {
+                        friend_list_fragment.add_all_friends_clear(0);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+            }
+        }
+        else // went offline -------------------
+        {
+            // check for combined online status of (friend + possible relay)
+            int status_new = a_TOX_CONNECTION;
+            int combined_connection_status_ = get_combined_connection_status(f.tox_public_key_string, status_new);
+
+            Log.i(TAG, "friend_connection_status:friend status combined con status:" + combined_connection_status_);
+
+            if (get_toxconnection_wrapper(combined_connection_status_) == TOX_CONNECTION_NONE.value)
+            {
+                Log.i(TAG, "friend_connection_status:friend status combined: OFFLINE");
+
+                f.TOX_CONNECTION = combined_connection_status_;
+                f.TOX_CONNECTION_on_off = get_toxconnection_wrapper(f.TOX_CONNECTION);
+
+                update_friend_in_db_connection_status(f);
+
+                try
+                {
+                    if (message_list_activity != null)
+                    {
+                        if (message_list_activity.get_current_friendnum() == friend_number_)
+                        {
+                            message_list_activity.set_friend_connection_status_icon();
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+
+                try
+                {
+                    if (friend_list_fragment != null)
+                    {
+                        // TODO: dirty hack, make better
+                        final boolean sorted_reload = true;
+                        if (!sorted_reload)
+                        {
+                            CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                            cc.is_friend = true;
+                            cc.friend_item = f;
+                            friend_list_fragment.modify_friend(cc, cc.is_friend);
+                        }
+                        else
+                        {
+                            friend_list_fragment.add_all_friends_clear(0);
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+            }
+            else
+            {
+                Log.i(TAG, "friend or relay offline, combined still ONLINE");
+            }
+        }
+
+    }
+
     public static void add_single_conference_message_from_messge_id(final long message_id, final boolean force)
     {
         try
@@ -5956,9 +5716,7 @@ public class MainActivity extends AppCompatActivity
                                         message_id).orderByIdDesc().get(0);
                                 if (m.id != -1)
                                 {
-                                    if ((force) ||
-                                        (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS <
-                                         System.currentTimeMillis()))
+                                    if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
                                     {
                                         update_all_messages_global_timestamp = System.currentTimeMillis();
                                         MainActivity.conference_message_list_fragment.add_message(m);
@@ -6002,8 +5760,7 @@ public class MainActivity extends AppCompatActivity
                             {
                                 Log.i(TAG, "add_single_message_from_messge_id:m.id=" + m.id);
 
-                                if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS <
-                                                System.currentTimeMillis()))
+                                if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
                                 {
                                     Log.i(TAG, "add_single_message_from_messge_id:add_message()");
 
@@ -6075,9 +5832,7 @@ public class MainActivity extends AppCompatActivity
                                 Message m = orma.selectFromMessage().idEq(message_id).orderByIdDesc().get(0);
                                 if (m.id != -1)
                                 {
-                                    if ((force) ||
-                                        (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS <
-                                         System.currentTimeMillis()))
+                                    if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
                                     {
                                         update_all_messages_global_timestamp = System.currentTimeMillis();
                                         MainActivity.message_list_fragment.modify_message(m);
@@ -6116,8 +5871,7 @@ public class MainActivity extends AppCompatActivity
                                     0);
                             if (m.id != -1)
                             {
-                                if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS <
-                                                System.currentTimeMillis()))
+                                if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
                                 {
                                     update_all_messages_global_timestamp = System.currentTimeMillis();
                                     MainActivity.message_list_fragment.modify_message(m);
@@ -6146,8 +5900,7 @@ public class MainActivity extends AppCompatActivity
         {
             if (message_list_fragment != null)
             {
-                if ((force) ||
-                    (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
+                if ((force) || (update_all_messages_global_timestamp + UPDATE_MESSAGES_NORMAL_MILLIS < System.currentTimeMillis()))
                 {
                     update_all_messages_global_timestamp = System.currentTimeMillis();
                     message_list_fragment.modify_message(m);
@@ -6211,8 +5964,8 @@ public class MainActivity extends AppCompatActivity
             //            Log.i(TAG, "get_message_id_from_filetransfer_id_and_friendnum:messages:2=====================================");
             //
 
-            Log.i(TAG, "get_message_id_from_filetransfer_id_and_friendnum:messages:filetransfer_id=" + filetransfer_id +
-                       " friend_number=" + friend_number);
+            Log.i(TAG,
+                  "get_message_id_from_filetransfer_id_and_friendnum:messages:filetransfer_id=" + filetransfer_id + " friend_number=" + friend_number);
 
             List<Message> m = orma.selectFromMessage().
                     filetransfer_idEq(filetransfer_id).and().
@@ -6320,8 +6073,7 @@ public class MainActivity extends AppCompatActivity
                     and().file_numberEq(file_number).orderByIdDesc().get(0).id;
 
             Log.i(TAG,
-                  "set_message_state_from_friendnum_and_filenum:ft_id=" + ft_id + " friend_number=" + friend_number +
-                  " file_number=" + file_number);
+                  "set_message_state_from_friendnum_and_filenum:ft_id=" + ft_id + " friend_number=" + friend_number + " file_number=" + file_number);
 
             set_message_state_from_id(orma.selectFromMessage().
                     filetransfer_idEq(ft_id).and().
@@ -6373,8 +6125,7 @@ public class MainActivity extends AppCompatActivity
                     get(0).id;
 
             Log.i(TAG,
-                  "set_message_filedb_from_friendnum_and_filenum:ft_id=" + ft_id + " friend_number=" + friend_number +
-                  " file_number=" + file_number);
+                  "set_message_filedb_from_friendnum_and_filenum:ft_id=" + ft_id + " friend_number=" + friend_number + " file_number=" + file_number);
 
 
             set_message_filedb_from_id(orma.selectFromMessage().
@@ -6886,6 +6637,124 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
+    static void add_friend_to_system(final String friend_public_key, final boolean as_friends_relay, final String owner_public_key)
+    {
+        Thread t = new Thread()
+        {
+            @Override
+            public void run()
+            {
+                try
+                {
+                    // toxcore needs this!!
+                    Thread.sleep(120);
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+
+                // ---- auto add all friends ----
+                // ---- auto add all friends ----
+                // ---- auto add all friends ----
+                long friendnum = tox_friend_add_norequest(friend_public_key); // add friend
+                Log.d(TAG, "add_friend_to_system:fnum add=" + friendnum);
+
+                try
+                {
+                    Thread.sleep(20);
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+                update_savedata_file_wrapper(); // save toxcore datafile (new friend added)
+
+                final FriendList f = new FriendList();
+                f.tox_public_key_string = friend_public_key;
+                f.TOX_USER_STATUS = 0;
+                f.TOX_CONNECTION = 0;
+                f.TOX_CONNECTION_on_off = get_toxconnection_wrapper(f.TOX_CONNECTION);
+                // set name as the last 5 char of the publickey (until we get a proper name)
+                f.name = friend_public_key.substring(friend_public_key.length() - 5, friend_public_key.length());
+                f.avatar_pathname = null;
+                f.avatar_filename = null;
+
+                try
+                {
+                    Log.i(TAG, "friend_request:insert:001:f=" + f);
+                    long res = orma.insertIntoFriendList(f);
+                    Log.i(TAG, "friend_request:insert:002:res=" + res);
+                }
+                catch (android.database.sqlite.SQLiteConstraintException e)
+                {
+                    e.printStackTrace();
+                    Log.i(TAG, "friend_request:insert:EE1:" + e.getMessage());
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                    Log.i(TAG, "friend_request:insert:EE2:" + e.getMessage());
+                }
+
+                if (as_friends_relay)
+                {
+                    // add relay for friend to DB
+                    Log.d(TAG, "add_friend_to_system:add_or_update_friend_relay");
+                    add_or_update_friend_relay(friend_public_key, owner_public_key);
+
+                    // update friendlist on screen
+                    try
+                    {
+                        friend_list_fragment.add_all_friends_clear(10);
+                    }
+                    catch (Exception e)
+                    {
+                        e.printStackTrace();
+                    }
+                }
+                else
+                {
+
+                    if (friend_list_fragment != null)
+                    {
+                        Log.i(TAG, "friend_request:003");
+                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                        cc.is_friend = true;
+                        cc.friend_item = f;
+                        friend_list_fragment.modify_friend(cc, cc.is_friend);
+                    }
+                }
+
+                // ---- auto add all friends ----
+                // ---- auto add all friends ----
+                // ---- auto add all friends ----
+
+                try
+                {
+                    Thread.sleep(100);
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+
+                if (PREF__U_keep_nospam == false)
+                {
+                    // ---- set new random nospam value after each added friend ----
+                    // ---- set new random nospam value after each added friend ----
+                    // ---- set new random nospam value after each added friend ----
+                    set_new_random_nospam_value();
+                    // ---- set new random nospam value after each added friend ----
+                    // ---- set new random nospam value after each added friend ----
+                    // ---- set new random nospam value after each added friend ----
+                }
+            }
+        };
+        t.start();
+
+    }
+
     static void update_display_friend_avatar(String friend_pubkey, String avatar_path_name, String avatar_file_name)
     {
         // TODO: write me ----
@@ -6960,8 +6829,8 @@ public class MainActivity extends AppCompatActivity
 
     static void copy_real_file_to_vfs_file(String src_path_name, String src_file_name, String dst_path_name, String dst_file_name)
     {
-        Log.i(TAG, "copy_real_file_to_vfs_file:" + src_path_name + "/" + src_file_name + " -> " + dst_path_name + "/" +
-                   dst_file_name);
+        Log.i(TAG,
+              "copy_real_file_to_vfs_file:" + src_path_name + "/" + src_file_name + " -> " + dst_path_name + "/" + dst_file_name);
         try
         {
             if (VFS_ENCRYPT)
@@ -7976,8 +7845,7 @@ public class MainActivity extends AppCompatActivity
                                 audio_buffer_2[audio_in_buffer_element_count - 1 - j].array(), 0,
                                 AudioReceiver.buffer_size);
                         audio_buffer_2[audio_in_buffer_element_count - j].rewind();
-                        audio_buffer_2_read_length[audio_in_buffer_element_count - j] = audio_buffer_2_read_length[
-                                audio_in_buffer_element_count - 1 - j];
+                        audio_buffer_2_read_length[audio_in_buffer_element_count - j] = audio_buffer_2_read_length[audio_in_buffer_element_count - 1 - j];
                         // Log.i(TAG, "audio_play:write:mv " + (audio_in_buffer_element_count - 1 - j + " -> " + (audio_in_buffer_element_count - j)));
                     }
                 }
@@ -8264,12 +8132,10 @@ public class MainActivity extends AppCompatActivity
                         {
                             try
                             {
-                                CallingActivity.ca.right_top_text_1.setText(
-                                        "O:" + Callstate.codec_to_str(Callstate.video_out_codec) + ":" +
-                                        Callstate.video_bitrate);
-                                CallingActivity.ca.right_top_text_1b.setText(
-                                        "I:" + Callstate.codec_to_str(Callstate.video_in_codec) + ":" +
-                                        Callstate.video_in_bitrate);
+                                CallingActivity.ca.right_top_text_1.setText("O:" + Callstate.codec_to_str(
+                                        Callstate.video_out_codec) + ":" + Callstate.video_bitrate);
+                                CallingActivity.ca.right_top_text_1b.setText("I:" + Callstate.codec_to_str(
+                                        Callstate.video_in_codec) + ":" + Callstate.video_in_bitrate);
                                 CallingActivity.ca.right_top_text_2.setText(
                                         "AO:" + Callstate.audio_bitrate + " " + Callstate.play_delay);
                             }
@@ -8682,6 +8548,291 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
+    static void add_or_update_friend_relay(String relay_public_key_string, String friend_pubkey)
+    {
+        if (relay_public_key_string == null)
+        {
+            Log.d(TAG,"add_or_update_friend_relay:ret01");
+            return;
+        }
+
+        if (friend_pubkey == null)
+        {
+            Log.d(TAG,"add_or_update_friend_relay:ret02");
+            return;
+        }
+
+        try
+        {
+            if (!is_any_relay(friend_pubkey))
+            {
+                String friend_old_relay_pubkey = get_relay_for_friend(friend_pubkey);
+                if (friend_old_relay_pubkey != null)
+                {
+                    // delete old relay
+                    delete_friend_current_relay(friend_pubkey);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+
+        try
+        {
+            if (!is_any_relay(friend_pubkey))
+            {
+                FriendList fl = main_get_friend(tox_friend_by_public_key__wrapper(friend_pubkey));
+
+                if (fl != null)
+                {
+                    // add relay to DB table
+                    RelayListDB new_relay = new RelayListDB();
+                    new_relay.own_relay = false;
+                    new_relay.TOX_CONNECTION = fl.TOX_CONNECTION;
+                    new_relay.TOX_CONNECTION_on_off = fl.TOX_CONNECTION_on_off;
+                    new_relay.last_online_timestamp = fl.last_online_timestamp;
+                    new_relay.tox_public_key_string = relay_public_key_string.toUpperCase();
+                    new_relay.tox_public_key_string_of_owner = friend_pubkey;
+                    //
+                    try
+                    {
+                        orma.insertIntoRelayListDB(new_relay);
+                        Log.i(TAG, "add_or_update_friend_relay:+ADD friend relay+ owner pubkey=" + friend_pubkey);
+                    }
+                    catch (Exception e2)
+                    {
+                        e2.printStackTrace();
+                    }
+
+                    // friend exists -> update
+                    try
+                    {
+                        orma.updateFriendList().
+                                tox_public_key_stringEq(relay_public_key_string).
+                                is_relay(true).
+                                execute();
+                    }
+                    catch (Exception e2)
+                    {
+                        e2.printStackTrace();
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+
+    }
+
+    static void delete_friend_current_relay(String friend_pubkey)
+    {
+        try
+        {
+            String friend_current_relay_pubkey = get_relay_for_friend(friend_pubkey);
+            if (friend_current_relay_pubkey != null)
+            {
+                try
+                {
+                    orma.updateFriendList().
+                            tox_public_key_stringEq(friend_current_relay_pubkey).
+                            is_relay(false).execute();
+                }
+                catch (Exception e1)
+                {
+                    e1.printStackTrace();
+                }
+
+                try
+                {
+                    orma.deleteFromRelayListDB().tox_public_key_string_of_ownerEq(friend_pubkey).execute();
+                }
+                catch (Exception e1)
+                {
+                    e1.printStackTrace();
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    static void send_relay_pubkey_to_all_friends(String relay_public_key_string)
+    {
+        List<FriendList> fl = orma.selectFromFriendList().
+                is_relayNotEq(true).
+                orderByTOX_CONNECTION_on_offDesc().
+                orderByNotification_silentAsc().
+                orderByLast_online_timestampDesc().
+                toList();
+
+        if (fl != null)
+        {
+            if (fl.size() > 0)
+            {
+                long friend_num = -1;
+                int i = 0;
+                for (i = 0; i < fl.size(); i++)
+                {
+                    FriendList n = fl.get(i);
+                    friend_num = tox_friend_by_public_key__wrapper(n.tox_public_key_string);
+                    byte[] data = hex_to_bytes("FF" + relay_public_key_string);
+                    data[0] = (byte) CONTROL_PROXY_MESSAGE_TYPE_PROXY_PUBKEY_FOR_FRIEND.value;
+                    tox_friend_send_lossless_packet(friend_num, data, TOX_PUBLIC_KEY_SIZE + 1);
+                }
+            }
+        }
+    }
+
+    static void send_all_friend_pubkeys_to_relay(String relay_public_key_string)
+    {
+        List<FriendList> fl = orma.selectFromFriendList().
+                is_relayNotEq(true).
+                orderByTOX_CONNECTION_on_offDesc().
+                orderByNotification_silentAsc().
+                orderByLast_online_timestampDesc().
+                toList();
+
+        if (fl != null)
+        {
+            if (fl.size() > 0)
+            {
+                int i = 0;
+                long friend_num = tox_friend_by_public_key__wrapper(relay_public_key_string);
+                for (i = 0; i < fl.size(); i++)
+                {
+                    FriendList n = fl.get(i);
+                    byte[] data = hex_to_bytes("FF" + n.tox_public_key_string);
+                    data[0] = (byte) CONTROL_PROXY_MESSAGE_TYPE_FRIEND_PUBKEY_FOR_PROXY.value;
+                    tox_friend_send_lossless_packet(friend_num, data, TOX_PUBLIC_KEY_SIZE + 1);
+                }
+            }
+        }
+    }
+
+    static boolean is_any_relay(String friend_pubkey)
+    {
+        boolean ret = false;
+        int num = orma.selectFromFriendList().
+                tox_public_key_stringEq(friend_pubkey).
+                is_relayEq(true).
+                count();
+
+        if (num > 0)
+        {
+            ret = true;
+        }
+
+        return ret;
+    }
+
+    static void send_friend_pubkey_to_relay(String relay_public_key_string, String friend_pubkey)
+    {
+        int i = 0;
+        long friend_num = tox_friend_by_public_key__wrapper(relay_public_key_string);
+        byte[] data = hex_to_bytes("FF" + friend_pubkey);
+        data[0] = (byte) CONTROL_PROXY_MESSAGE_TYPE_FRIEND_PUBKEY_FOR_PROXY.value;
+        Log.d(TAG, "send_friend_pubkey_to_relay:data=" + data);
+        int result = tox_friend_send_lossless_packet(friend_num, data, TOX_PUBLIC_KEY_SIZE + 1);
+        Log.d(TAG, "send_friend_pubkey_to_relay:res=" + result);
+    }
+
+    static void send_relay_pubkey_to_friend(String relay_public_key_string, String friend_pubkey)
+    {
+        int i = 0;
+        long friend_num = tox_friend_by_public_key__wrapper(friend_pubkey);
+        byte[] data = hex_to_bytes("FF" + relay_public_key_string);
+        data[0] = (byte) CONTROL_PROXY_MESSAGE_TYPE_PROXY_PUBKEY_FOR_FRIEND.value;
+        Log.d(TAG, "send_relay_pubkey_to_friend:data=" + data);
+        int result = tox_friend_send_lossless_packet(friend_num, data, TOX_PUBLIC_KEY_SIZE + 1);
+        Log.d(TAG, "send_relay_pubkey_to_friend:res=" + result);
+    }
+
+    static boolean have_own_relay()
+    {
+        boolean ret = false;
+        int num = orma.selectFromRelayListDB().own_relayEq(true).count();
+
+        if (num == 1)
+        {
+            ret = true;
+        }
+
+        return ret;
+    }
+
+    static FriendList get_friend_for_relay(String relay_pubkey)
+    {
+        FriendList ret = null;
+        try
+        {
+            String f_pubkey = orma.selectFromRelayListDB().own_relayEq(false).
+                    tox_public_key_stringEq(relay_pubkey).get(0).tox_public_key_string_of_owner;
+            ret = orma.selectFromFriendList().tox_public_key_stringEq(f_pubkey).get(0);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+
+        return ret;
+    }
+
+    static boolean is_own_relay(String friend_pubkey)
+    {
+        boolean ret = false;
+        try
+        {
+            String own_relay_pubkey = get_own_relay_pubkey();
+            if (own_relay_pubkey != null)
+            {
+                if (friend_pubkey.equals(own_relay_pubkey) == true)
+                {
+                    ret = true;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+        }
+
+        return ret;
+    }
+
+    static String get_own_relay_pubkey()
+    {
+        String ret = null;
+        try
+        {
+            ret = orma.selectFromRelayListDB().own_relayEq(true).get(0).tox_public_key_string;
+        }
+        catch (Exception e)
+        {
+        }
+
+        return ret;
+    }
+
+    static String get_relay_for_friend(String friend_pubkey)
+    {
+        String ret = null;
+        try
+        {
+            ret = orma.selectFromRelayListDB().own_relayEq(false).
+                    tox_public_key_string_of_ownerEq(friend_pubkey).get(0).tox_public_key_string;
+        }
+        catch (Exception e)
+        {
+        }
+
+        return ret;
+    }
+
     static void set_all_conferences_inactive()
     {
         try
@@ -8714,6 +8865,123 @@ public class MainActivity extends AppCompatActivity
             e.printStackTrace();
             Log.i(TAG, "set_conference_inactive:EE:" + e.getMessage());
         }
+    }
+
+    static boolean set_friend_as_own_relay_in_db(String friend_public_key)
+    {
+        boolean ret = false;
+
+        try
+        {
+            final List<FriendList> fl = orma.selectFromFriendList().
+                    tox_public_key_stringEq(friend_public_key).toList();
+
+
+            if (fl.size() == 1)
+            {
+                // add relay to DB table
+                RelayListDB new_relay = new RelayListDB();
+                new_relay.own_relay = true;
+                new_relay.TOX_CONNECTION = fl.get(0).TOX_CONNECTION;
+                new_relay.TOX_CONNECTION_on_off = fl.get(0).TOX_CONNECTION_on_off;
+                new_relay.last_online_timestamp = fl.get(0).last_online_timestamp;
+                new_relay.tox_public_key_string = friend_public_key;
+                new_relay.tox_public_key_string_of_owner = "-- OWN RELAY --";
+                //
+                orma.insertIntoRelayListDB(new_relay);
+                Log.i(TAG, "friend_as_relay_own_in_db:+ADD own relay+");
+
+                // friend exists -> update
+                orma.updateFriendList().
+                        tox_public_key_stringEq(friend_public_key).
+                        is_relay(true).
+                        execute();
+
+                Log.i(TAG, "friend_as_relay_own_in_db:+UPDATE friend+");
+
+                ret = true;
+            }
+        }
+        catch (Exception e1)
+        {
+            Log.i(TAG, "friend_as_relay_own_in_db:EE3:" + e1.getMessage());
+        }
+
+        return ret;
+    }
+
+    static boolean remove_friend_relay_in_db(String friend_pubkey)
+    {
+        boolean ret = false;
+
+        try
+        {
+            String friend_relay_pubkey = get_relay_for_friend(friend_pubkey);
+
+            if (friend_relay_pubkey != null)
+            {
+                try
+                {
+                    orma.updateFriendList().tox_public_key_stringEq(friend_relay_pubkey).
+                            is_relay(false).execute();
+                }
+                catch (Exception e3)
+                {
+                    e3.printStackTrace();
+                }
+
+                try
+                {
+                    orma.deleteFromRelayListDB().tox_public_key_string_of_ownerEq(friend_pubkey).
+                            execute();
+                }
+                catch (Exception e3)
+                {
+                    e3.printStackTrace();
+                }
+
+            }
+        }
+        catch (Exception e1)
+        {
+            Log.i(TAG, "remove_friend_relay_in_db:EE3:" + e1.getMessage());
+        }
+
+        return ret;
+    }
+
+    static boolean remove_own_relay_in_db()
+    {
+        boolean ret = false;
+
+        try
+        {
+            final List<RelayListDB> rl = orma.selectFromRelayListDB().
+                    own_relayEq(true).toList();
+
+
+            if (rl.size() == 1)
+            {
+                orma.deleteFromRelayListDB().
+                        tox_public_key_stringEq(rl.get(0).tox_public_key_string).execute();
+
+                // friend exists -> update
+                orma.updateFriendList().
+                        tox_public_key_stringEq(rl.get(0).tox_public_key_string).
+                        is_relay(false).
+                        execute();
+
+                Log.i(TAG, "remove_own_relay_in_db:+UPDATE friend+");
+
+                ret = true;
+            }
+        }
+        catch (Exception e1)
+        {
+            Log.i(TAG, "remove_own_relay_in_db:EE3:" + e1.getMessage());
+        }
+
+        return ret;
     }
 
     static void new_or_updated_conference(long conference_number, String who_invited_public_key, String conference_identifier, int conference_type)
@@ -9121,7 +9389,8 @@ public class MainActivity extends AppCompatActivity
                         if (first)
                         {
                             first = false;
-                            copy_text = new StringBuilder("" + orma.selectFromMessage().idEq((Long) i.next()).get(0).text);
+                            copy_text = new StringBuilder(
+                                    "" + orma.selectFromMessage().idEq((Long) i.next()).get(0).text);
                         }
                         else
                         {
@@ -9183,11 +9452,13 @@ public class MainActivity extends AppCompatActivity
                         if (first)
                         {
                             first = false;
-                            copy_text = new StringBuilder("" + orma.selectFromConferenceMessage().idEq((Long) i.next()).get(0).text);
+                            copy_text = new StringBuilder(
+                                    "" + orma.selectFromConferenceMessage().idEq((Long) i.next()).get(0).text);
                         }
                         else
                         {
-                            copy_text.append("\n").append(orma.selectFromConferenceMessage().idEq((Long) i.next()).get(0).text);
+                            copy_text.append("\n").append(
+                                    orma.selectFromConferenceMessage().idEq((Long) i.next()).get(0).text);
                         }
                     }
                     catch (Exception e)
@@ -9354,6 +9625,51 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
+    static int get_combined_connection_status(String friend_pubkey, int a_TOX_CONNECTION)
+    {
+        int ret = TOX_CONNECTION_NONE.value;
+
+        if (is_any_relay(friend_pubkey))
+        {
+            ret = a_TOX_CONNECTION;
+        }
+        else
+        {
+            String relay_ = get_relay_for_friend(friend_pubkey);
+            if (relay_ == null)
+            {
+                // friend has no relay
+                ret = a_TOX_CONNECTION;
+            }
+            else
+            {
+                // friend with relay
+                if (a_TOX_CONNECTION != TOX_CONNECTION_NONE.value)
+                {
+                    ret = a_TOX_CONNECTION;
+                }
+                else
+                {
+                    int friend_con_status = orma.selectFromFriendList().
+                            tox_public_key_stringEq(friend_pubkey).
+                            get(0).TOX_CONNECTION_real;
+                    int relay_con_status = orma.selectFromFriendList().
+                            tox_public_key_stringEq(relay_).
+                            get(0).TOX_CONNECTION_real;
+
+                    if ((friend_con_status != TOX_CONNECTION_NONE.value) || (relay_con_status != TOX_CONNECTION_NONE.value))
+                    {
+                        // if one of them is online, return combined "online" as status
+                        ret = TOX_CONNECTION_TCP.value;
+                    }
+
+                }
+            }
+        }
+
+        return ret;
+    }
+
     static class send_message_result
     {
         long msg_num;
@@ -9362,8 +9678,30 @@ public class MainActivity extends AppCompatActivity
         String raw_message_buf_hex;
     }
 
+    /*************************************************************************/
+    /* this function now really sends a 1:1 to a friend (or a friends relay) */
+    /*************************************************************************/
     public static send_message_result tox_friend_send_message_wrapper(long friendnum, int a_TOX_MESSAGE_TYPE, @NonNull String message)
     {
+        Log.d(TAG,"tox_friend_send_message_wrapper:" + friendnum);
+        long friendnum_to_use = friendnum;
+        FriendList f = main_get_friend(friendnum);
+        Log.d(TAG,"tox_friend_send_message_wrapper:f=" + f);
+        if (f != null)
+        {
+            Log.d(TAG,"tox_friend_send_message_wrapper:f conn" + f.TOX_CONNECTION_real);
+            if (f.TOX_CONNECTION_real == TOX_CONNECTION_NONE.value)
+            {
+                String relay_pubkey = get_relay_for_friend(f.tox_public_key_string);
+                if (relay_pubkey != null)
+                {
+                    // friend has a relay
+                    friendnum_to_use =  tox_friend_by_public_key__wrapper(relay_pubkey);
+                    Log.d(TAG,"tox_friend_send_message_wrapper:friendnum_to_use=" + friendnum_to_use);
+                }
+            }
+        }
+
         send_message_result result = new send_message_result();
 
         ByteBuffer raw_message_buf = ByteBuffer.allocateDirect((int) TOX_MAX_FILETRANSFER_SIZE_MSGV2);
@@ -9372,8 +9710,11 @@ public class MainActivity extends AppCompatActivity
 
         // use msg V2 API Call
         long t_sec = (System.currentTimeMillis() / 1000);
-        long res = tox_util_friend_send_message_v2(friendnum, a_TOX_MESSAGE_TYPE, t_sec, message, message.length(),
+        long res = tox_util_friend_send_message_v2(friendnum_to_use, a_TOX_MESSAGE_TYPE, t_sec, message, message.length(),
                                                    raw_message_buf, raw_message_length_buf, msg_id_buffer);
+
+        Log.d(TAG,"tox_friend_send_message_wrapper:res=" + res);
+
         int raw_message_length_int = raw_message_length_buf.
                 array()[raw_message_length_buf.arrayOffset()] & 0xFF + (raw_message_length_buf.
                 array()[raw_message_length_buf.arrayOffset() + 1] & 0xFF) * 256;
@@ -9583,6 +9924,674 @@ public class MainActivity extends AppCompatActivity
         }
 
         return ret;
+    }
+
+    static void receive_incoming_message(int msg_type, long friend_number, String friend_message_text_utf8, byte[] raw_message, long raw_message_length, String original_sender_pubkey)
+    {
+        // incoming msg can be:
+        // msgV1 text only message -> msg_type, friend_number, friend_message_text_utf8
+        // msgV2 direct message -> msg_type, friend_number, friend_message_text_utf8, raw_message, raw_message_length
+        // msgV2 relay message -> msg_type, friend_number, friend_message_text_utf8, raw_message, raw_message_length, original_sender_pubkey
+        if (msg_type == 0)
+        {
+            // msgV1 text only message
+
+            // Log.i(TAG, "friend_message:friend:" + friend_number + " message:" + friend_message);
+
+            // if message list for this friend is open, then don't do notification and "new" badge
+            boolean do_notification = true;
+            boolean do_badge_update = true;
+            // Log.i(TAG, "noti_and_badge:001:" + message_list_activity);
+            if (message_list_activity != null)
+            {
+                // Log.i(TAG, "noti_and_badge:002:" + message_list_activity.get_current_friendnum() + ":" + friend_number);
+                if (message_list_activity.get_current_friendnum() == friend_number)
+                {
+                    // Log.i(TAG, "noti_and_badge:003:");
+                    // no notifcation and no badge update
+                    do_notification = false;
+                    do_badge_update = false;
+                }
+            }
+
+            Message m = new Message();
+
+            if (!do_badge_update)
+            {
+                Log.i(TAG, "noti_and_badge:004a:");
+                m.is_new = false;
+            }
+            else
+            {
+                Log.i(TAG, "noti_and_badge:004b:");
+                m.is_new = true;
+            }
+
+            // m.tox_friendnum = friend_number;
+            m.tox_friendpubkey = tox_friend_get_public_key__wrapper(friend_number);
+            m.direction = 0; // msg received
+            m.TOX_MESSAGE_TYPE = 0;
+            m.read = false;
+            m.TRIFA_MESSAGE_TYPE = TRIFA_MSG_TYPE_TEXT.value;
+            m.rcvd_timestamp = System.currentTimeMillis();
+            m.rcvd_timestamp_ms = 0;
+            m.sent_timestamp = System.currentTimeMillis();
+            m.sent_timestamp_ms = 0;
+            m.text = friend_message_text_utf8;
+            m.msg_version = 0;
+
+            if (message_list_activity != null)
+            {
+                if (message_list_activity.get_current_friendnum() == friend_number)
+                {
+                    insert_into_message_db(m, true);
+                }
+                else
+                {
+                    insert_into_message_db(m, false);
+                }
+            }
+            else
+            {
+                insert_into_message_db(m, false);
+            }
+
+            try
+            {
+                // update "new" status on friendlist fragment
+                FriendList f = orma.selectFromFriendList().tox_public_key_stringEq(m.tox_friendpubkey).toList().get(0);
+                if (friend_list_fragment != null)
+                {
+                    if (f != null)
+                    {
+                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                        cc.is_friend = true;
+                        cc.friend_item = f;
+                        friend_list_fragment.modify_friend(cc, cc.is_friend);
+                    }
+                }
+
+                if (f.notification_silent)
+                {
+                    do_notification = false;
+                }
+
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+                Log.i(TAG, "update *new* status:EE1:" + e.getMessage());
+            }
+
+            if (do_notification)
+            {
+                Log.i(TAG, "noti_and_badge:005:");
+
+                // start "new" notification
+                Runnable myRunnable = new Runnable()
+                {
+                    @Override
+                    public void run()
+                    {
+                        try
+                        {
+                            // allow notification every n seconds
+                            if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) < System.currentTimeMillis())
+                            {
+
+                                if (PREF__notification)
+                                {
+                                    Notification_new_message_last_shown_timestamp = System.currentTimeMillis();
+
+                                    Intent notificationIntent = new Intent(context_s, StartMainActivityWrapper.class);
+                                    notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    PendingIntent pendingIntent = PendingIntent.getActivity(context_s, 0,
+                                                                                            notificationIntent, 0);
+
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                    NotificationCompat.Builder b;
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                                    {
+                                        if ((PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound_and_vibrate);
+                                        }
+                                        else if ((PREF__notification_sound) && (!PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound);
+                                        }
+                                        else if ((!PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_vibrate);
+                                        }
+                                        else
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_silent);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        b = new NotificationCompat.Builder(context_s);
+                                    }
+                                    b.setContentIntent(pendingIntent);
+                                    b.setSmallIcon(R.drawable.circle_orange);
+                                    b.setLights(Color.parseColor("#ffce00"), 500, 500);
+                                    Uri default_notification_sound = RingtoneManager.getDefaultUri(
+                                            RingtoneManager.TYPE_NOTIFICATION);
+
+                                    if (PREF__notification_sound)
+                                    {
+                                        b.setSound(default_notification_sound);
+                                    }
+
+                                    if (PREF__notification_vibrate)
+                                    {
+                                        long[] vibrate_pattern = {100, 300};
+                                        b.setVibrate(vibrate_pattern);
+                                    }
+
+                                    b.setContentTitle("TRIfA");
+                                    b.setAutoCancel(true);
+                                    b.setContentText("new Message");
+
+                                    Notification notification3 = b.build();
+                                    nmn3.notify(Notification_new_message_ID, notification3);
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                };
+
+                try
+                {
+                    if (main_handler_s != null)
+                    {
+                        main_handler_s.post(myRunnable);
+                    }
+                }
+                catch (Exception e)
+                {
+                }
+            }
+
+
+        }
+        else if (msg_type == 1)
+        {
+            // msgV2 direct message
+
+            // Log.i(TAG,
+            //      "friend_message_v2:friend:" + friend_number + " ts:" + ts_sec + " systime" + System.currentTimeMillis() +
+            //      " message:" + friend_message);
+
+            // if message list for this friend is open, then don't do notification and "new" badge
+            boolean do_notification = true;
+            boolean do_badge_update = true;
+            // Log.i(TAG, "noti_and_badge:001:" + message_list_activity);
+            if (message_list_activity != null)
+            {
+                // Log.i(TAG, "noti_and_badge:002:" + message_list_activity.get_current_friendnum() + ":" + friend_number);
+                if (message_list_activity.get_current_friendnum() == friend_number)
+                {
+                    // Log.i(TAG, "noti_and_badge:003:");
+                    // no notifcation and no badge update
+                    do_notification = false;
+                    do_badge_update = false;
+                }
+            }
+
+            ByteBuffer raw_message_buf = ByteBuffer.allocateDirect((int) raw_message_length);
+            raw_message_buf.put(raw_message, 0, (int) raw_message_length);
+            ByteBuffer msg_id_buffer = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
+            tox_messagev2_get_message_id(raw_message_buf, msg_id_buffer);
+            long ts_sec = tox_messagev2_get_ts_sec(raw_message_buf);
+            long ts_ms = tox_messagev2_get_ts_ms(raw_message_buf);
+
+            String msg_id_as_hex_string = bytesToHex(msg_id_buffer.array(), msg_id_buffer.arrayOffset(),
+                                                     msg_id_buffer.limit());
+            // Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:MSGv2HASH:2=" + msg_id_as_hex_string);
+
+            int already_have_message = orma.selectFromMessage().tox_friendpubkeyEq(
+                    tox_friend_get_public_key__wrapper(friend_number)).and().msg_id_hashEq(
+                    msg_id_as_hex_string).count();
+            if (already_have_message > 0)
+            {
+                // it's a double send, ignore it
+                // send message receipt v2, most likely the other party did not get it yet
+                // TODO: use received timstamp, not "now" here!
+                long t_sec_receipt = (System.currentTimeMillis() / 1000);
+                tox_util_friend_send_msg_receipt_v2(friend_number, t_sec_receipt, msg_id_buffer);
+                return;
+            }
+
+            // add FT message to UI
+            Message m = new Message();
+
+            if (!do_badge_update)
+            {
+                Log.i(TAG, "noti_and_badge:004a:");
+                m.is_new = false;
+            }
+            else
+            {
+                Log.i(TAG, "noti_and_badge:004b:");
+                m.is_new = true;
+            }
+
+
+            m.tox_friendpubkey = tox_friend_get_public_key__wrapper(friend_number);
+            m.direction = 0; // msg received
+            m.TOX_MESSAGE_TYPE = 0;
+            m.TRIFA_MESSAGE_TYPE = TRIFA_MSG_TYPE_TEXT.value;
+            m.filetransfer_id = -1;
+            m.filedb_id = -1;
+            m.state = TOX_FILE_CONTROL_RESUME.value;
+            m.ft_accepted = false;
+            m.ft_outgoing_started = false;
+            m.sent_timestamp = (ts_sec * 1000); // sent time as unix timestamp -> convert to milliseconds
+            m.sent_timestamp_ms = ts_ms; // "ms" part of timestamp (could be just an increasing number)
+            m.rcvd_timestamp = System.currentTimeMillis();
+            m.rcvd_timestamp_ms = 0;
+            m.text = friend_message_text_utf8;
+            m.msg_version = 1;
+            m.msg_id_hash = msg_id_as_hex_string;
+
+            Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:" + long_date_time_format(m.rcvd_timestamp));
+
+            if (message_list_activity != null)
+            {
+                if (message_list_activity.get_current_friendnum() == friend_number)
+                {
+                    insert_into_message_db(m, true);
+                }
+                else
+                {
+                    insert_into_message_db(m, false);
+                }
+            }
+            else
+            {
+                insert_into_message_db(m, false);
+            }
+
+            // send message receipt v2
+            long t_sec_receipt = (System.currentTimeMillis() / 1000);
+            tox_util_friend_send_msg_receipt_v2(friend_number, t_sec_receipt, msg_id_buffer);
+
+            try
+            {
+                // update "new" status on friendlist fragment
+                FriendList f = orma.selectFromFriendList().tox_public_key_stringEq(m.tox_friendpubkey).toList().get(0);
+                if (friend_list_fragment != null)
+                {
+                    if (f != null)
+                    {
+                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                        cc.is_friend = true;
+                        cc.friend_item = f;
+                        friend_list_fragment.modify_friend(cc, cc.is_friend);
+                    }
+                }
+
+                if (f.notification_silent)
+                {
+                    do_notification = false;
+                }
+
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+                Log.i(TAG, "update *new* status:EE1:" + e.getMessage());
+            }
+
+            if (do_notification)
+            {
+                Log.i(TAG, "noti_and_badge:005:");
+
+                // start "new" notification
+                Runnable myRunnable = new Runnable()
+                {
+                    @Override
+                    public void run()
+                    {
+                        try
+                        {
+                            // allow notification every n seconds
+                            if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) < System.currentTimeMillis())
+                            {
+
+                                if (PREF__notification)
+                                {
+                                    Notification_new_message_last_shown_timestamp = System.currentTimeMillis();
+
+                                    Intent notificationIntent = new Intent(context_s, StartMainActivityWrapper.class);
+                                    notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    PendingIntent pendingIntent = PendingIntent.getActivity(context_s, 0,
+                                                                                            notificationIntent, 0);
+
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                    NotificationCompat.Builder b;
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                                    {
+                                        if ((PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound_and_vibrate);
+                                        }
+                                        else if ((PREF__notification_sound) && (!PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound);
+                                        }
+                                        else if ((!PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_vibrate);
+                                        }
+                                        else
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_silent);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        b = new NotificationCompat.Builder(context_s);
+                                    }
+                                    b.setContentIntent(pendingIntent);
+                                    b.setSmallIcon(R.drawable.circle_orange);
+                                    b.setLights(Color.parseColor("#ffce00"), 500, 500);
+                                    Uri default_notification_sound = RingtoneManager.getDefaultUri(
+                                            RingtoneManager.TYPE_NOTIFICATION);
+
+                                    if (PREF__notification_sound)
+                                    {
+                                        b.setSound(default_notification_sound);
+                                    }
+
+                                    if (PREF__notification_vibrate)
+                                    {
+                                        long[] vibrate_pattern = {100, 300};
+                                        b.setVibrate(vibrate_pattern);
+                                    }
+
+                                    b.setContentTitle("TRIfA");
+                                    b.setAutoCancel(true);
+                                    b.setContentText("new Message");
+
+                                    Notification notification3 = b.build();
+                                    nmn3.notify(Notification_new_message_ID, notification3);
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                };
+
+                try
+                {
+                    if (main_handler_s != null)
+                    {
+                        main_handler_s.post(myRunnable);
+                    }
+                }
+                catch (Exception e)
+                {
+                }
+            }
+        }
+        else if (msg_type == 2)
+        {
+            // msgV2 relay message
+
+            long friend_number_real_sender = tox_friend_by_public_key__wrapper(original_sender_pubkey);
+
+            // Log.i(TAG,
+            //      "friend_message_v2:friend:" + friend_number + " ts:" + ts_sec + " systime" + System.currentTimeMillis() +
+            //      " message:" + friend_message);
+
+            // if message list for this friend is open, then don't do notification and "new" badge
+            boolean do_notification = true;
+            boolean do_badge_update = true;
+            // Log.i(TAG, "noti_and_badge:001:" + message_list_activity);
+            if (message_list_activity != null)
+            {
+                // Log.i(TAG, "noti_and_badge:002:" + message_list_activity.get_current_friendnum() + ":" + friend_number);
+                if (message_list_activity.get_current_friendnum() == friend_number_real_sender)
+                {
+                    // Log.i(TAG, "noti_and_badge:003:");
+                    // no notifcation and no badge update
+                    do_notification = false;
+                    do_badge_update = false;
+                }
+            }
+
+            ByteBuffer raw_message_buf = ByteBuffer.allocateDirect((int) raw_message_length);
+            raw_message_buf.put(raw_message, 0, (int) raw_message_length);
+            ByteBuffer msg_id_buffer = ByteBuffer.allocateDirect(TOX_HASH_LENGTH);
+            tox_messagev2_get_message_id(raw_message_buf, msg_id_buffer);
+            long ts_sec = tox_messagev2_get_ts_sec(raw_message_buf);
+            long ts_ms = tox_messagev2_get_ts_ms(raw_message_buf);
+
+            String msg_id_as_hex_string = bytesToHex(msg_id_buffer.array(), msg_id_buffer.arrayOffset(),
+                                                     msg_id_buffer.limit());
+            // Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:MSGv2HASH:2=" + msg_id_as_hex_string);
+
+            int already_have_message = orma.selectFromMessage().tox_friendpubkeyEq(
+                    tox_friend_get_public_key__wrapper(friend_number_real_sender)).and().msg_id_hashEq(
+                    msg_id_as_hex_string).count();
+            if (already_have_message > 0)
+            {
+                // it's a double send, ignore it
+                // send message receipt v2, most likely the other party did not get it yet
+                // TODO: use received timstamp, not "now" here!
+                long t_sec_receipt = (System.currentTimeMillis() / 1000);
+                tox_util_friend_send_msg_receipt_v2(friend_number_real_sender, t_sec_receipt, msg_id_buffer);
+                return;
+            }
+
+            // add FT message to UI
+            Message m = new Message();
+
+            if (!do_badge_update)
+            {
+                Log.i(TAG, "noti_and_badge:004a:");
+                m.is_new = false;
+            }
+            else
+            {
+                Log.i(TAG, "noti_and_badge:004b:");
+                m.is_new = true;
+            }
+
+
+            m.tox_friendpubkey = original_sender_pubkey;
+            m.direction = 0; // msg received
+            m.TOX_MESSAGE_TYPE = 0;
+            m.TRIFA_MESSAGE_TYPE = TRIFA_MSG_TYPE_TEXT.value;
+            m.filetransfer_id = -1;
+            m.filedb_id = -1;
+            m.state = TOX_FILE_CONTROL_RESUME.value;
+            m.ft_accepted = false;
+            m.ft_outgoing_started = false;
+            m.sent_timestamp = (ts_sec * 1000); // sent time as unix timestamp -> convert to milliseconds
+            m.sent_timestamp_ms = ts_ms; // "ms" part of timestamp (could be just an increasing number)
+            m.rcvd_timestamp = System.currentTimeMillis();
+            m.rcvd_timestamp_ms = 0;
+            m.text = friend_message_text_utf8;
+            m.msg_version = 1;
+            m.msg_id_hash = msg_id_as_hex_string;
+
+            Log.i(TAG, "TOX_FILE_KIND_MESSAGEV2_SEND:" + long_date_time_format(m.rcvd_timestamp));
+
+            if (message_list_activity != null)
+            {
+                if (message_list_activity.get_current_friendnum() == friend_number_real_sender)
+                {
+                    insert_into_message_db(m, true);
+                }
+                else
+                {
+                    insert_into_message_db(m, false);
+                }
+            }
+            else
+            {
+                insert_into_message_db(m, false);
+            }
+
+            // send message receipt v2
+            long t_sec_receipt = (System.currentTimeMillis() / 1000);
+            tox_util_friend_send_msg_receipt_v2(friend_number_real_sender, t_sec_receipt, msg_id_buffer);
+
+            try
+            {
+                // update "new" status on friendlist fragment
+                FriendList f = orma.selectFromFriendList().tox_public_key_stringEq(m.tox_friendpubkey).toList().get(0);
+                if (friend_list_fragment != null)
+                {
+                    if (f != null)
+                    {
+                        CombinedFriendsAndConferences cc = new CombinedFriendsAndConferences();
+                        cc.is_friend = true;
+                        cc.friend_item = f;
+                        friend_list_fragment.modify_friend(cc, cc.is_friend);
+                    }
+                }
+
+                if (f.notification_silent)
+                {
+                    do_notification = false;
+                }
+
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+                Log.i(TAG, "update *new* status:EE1:" + e.getMessage());
+            }
+
+            if (do_notification)
+            {
+                Log.i(TAG, "noti_and_badge:005:");
+
+                // start "new" notification
+                Runnable myRunnable = new Runnable()
+                {
+                    @Override
+                    public void run()
+                    {
+                        try
+                        {
+                            // allow notification every n seconds
+                            if ((Notification_new_message_last_shown_timestamp + Notification_new_message_every_millis) < System.currentTimeMillis())
+                            {
+
+                                if (PREF__notification)
+                                {
+                                    Notification_new_message_last_shown_timestamp = System.currentTimeMillis();
+
+                                    Intent notificationIntent = new Intent(context_s, StartMainActivityWrapper.class);
+                                    notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    PendingIntent pendingIntent = PendingIntent.getActivity(context_s, 0,
+                                                                                            notificationIntent, 0);
+
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                    NotificationCompat.Builder b;
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                                    {
+                                        if ((PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound_and_vibrate);
+                                        }
+                                        else if ((PREF__notification_sound) && (!PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_sound);
+                                        }
+                                        else if ((!PREF__notification_sound) && (PREF__notification_vibrate))
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_vibrate);
+                                        }
+                                        else
+                                        {
+                                            b = new NotificationCompat.Builder(context_s,
+                                                                               MainActivity.channelId_newmessage_silent);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        b = new NotificationCompat.Builder(context_s);
+                                    }
+                                    b.setContentIntent(pendingIntent);
+                                    b.setSmallIcon(R.drawable.circle_orange);
+                                    b.setLights(Color.parseColor("#ffce00"), 500, 500);
+                                    Uri default_notification_sound = RingtoneManager.getDefaultUri(
+                                            RingtoneManager.TYPE_NOTIFICATION);
+
+                                    if (PREF__notification_sound)
+                                    {
+                                        b.setSound(default_notification_sound);
+                                    }
+
+                                    if (PREF__notification_vibrate)
+                                    {
+                                        long[] vibrate_pattern = {100, 300};
+                                        b.setVibrate(vibrate_pattern);
+                                    }
+
+                                    b.setContentTitle("TRIfA");
+                                    b.setAutoCancel(true);
+                                    b.setContentText("new Message");
+
+                                    Notification notification3 = b.build();
+                                    nmn3.notify(Notification_new_message_ID, notification3);
+                                    // -- notification ------------------
+                                    // -- notification ------------------
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                };
+
+                try
+                {
+                    if (main_handler_s != null)
+                    {
+                        main_handler_s.post(myRunnable);
+                    }
+                }
+                catch (Exception e)
+                {
+                }
+            }
+
+        }
     }
 
     // --------- make app crash ---------
